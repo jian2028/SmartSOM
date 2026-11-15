@@ -13,7 +13,51 @@ from smartsom.config.base_diagnostic import (
 from smartsom.config.codec import digest, primitive
 from smartsom.config.reservation import compile_reservation
 from smartsom.experiments.launch import compile_launch
+from tests.helpers.algorithm import rllib_recipe
 from tests.unit.test_algorithm_components import author, recipe
+
+
+def test_current_campaign_has_one_rule_and_internal_random_per_size():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    inventory = json.loads((root / "experiments/current/campaign.json").read_text())
+    for size in ("small", "medium"):
+        rules = [e for e in inventory["entries"] if e["id"].startswith(size + "/rule")]
+        assert [e["id"] for e in rules] == [size + "/rule"]
+        assert rules[0]["speed_policy"] == "critical-ratio/v1"
+        assert (root / rules[0]["algorithm"]).is_file()
+        assert len(rules[0]["replaces"]) == 3
+        random = next(e for e in inventory["entries"] if e["id"] == size + "/random")
+        assert random["role"] == "internal_debug_only"
+        parent_path = (
+            root / f"experiments/current/{size}/base-shared-ppo/experiment.yaml"
+        )
+        parent = yaml.safe_load(parent_path.read_text())
+        parent_algorithm = yaml.safe_load(
+            (parent_path.parent / parent["algorithm"]).read_text()
+        )
+        for entry in (rules[0], random):
+            path = root / entry["path"]
+            experiment = yaml.safe_load(path.read_text())
+            algorithm = yaml.safe_load(
+                (path.parent / experiment["algorithm"]).read_text()
+            )
+            assert experiment["run"]["task"] == "evaluate"
+            assert experiment["run"]["methods"] == [entry["id"].split("/")[1]]
+            assert (path.parent / experiment["scenario"]).resolve() == (
+                parent_path.parent / parent["scenario"]
+            ).resolve()
+            assert experiment["drain_ticks"] == parent["drain_ticks"]
+            for split in ("test", "periodic_evaluation"):
+                assert (path.parent / experiment["case_sets"][split]).resolve() == (
+                    parent_path.parent / parent["case_sets"][split]
+                ).resolve()
+            assert (
+                algorithm["decision_protocol"] == parent_algorithm["decision_protocol"]
+            )
+            assert algorithm["traffic"] == parent_algorithm["traffic"]
+            assert algorithm["action_representation"] == {"default": "direct"}
 
 
 @pytest.mark.parametrize(
@@ -120,7 +164,7 @@ def test_research_directory_expands_seeds_and_ignores_auxiliary_yaml(tmp_path):
     for variant in ("shared", "independent"):
         folder = tmp_path / "experiments/net/01-test" / variant
         folder.mkdir(parents=True)
-        data = recipe("ppo")
+        data = rllib_recipe("ppo")
         if variant == "independent":
             data["production"]["policies"]["ppo"]["parameter_sharing"] = {
                 "roles": {"machine": "independent"}
@@ -496,7 +540,10 @@ def test_v2_learning_recipes_share_twelve_case_validation_and_bounded_storage():
                 "isl-independent",
                 "morris",
             ):
-                path = root / f"experiments/v2/{scale}/{method}-{seed}/experiment.yaml"
+                path = (
+                    root
+                    / f"archive/legacy_runtime/experiments/v2/{scale}/{method}-{seed}/experiment.yaml"
+                )
                 document = yaml.safe_load(path.read_text())
                 assert document["checkpoint_retention"] == "best_last"
                 assert document["checkpoint_every_episodes"] == 50
@@ -523,9 +570,9 @@ def test_v2_regeneration_preserves_committed_algorithm_bindings(tmp_path, monkey
     import shutil
     from pathlib import Path
 
-    from scripts import build_v2_experiments as generator
+    from archive.legacy_runtime.scripts import build_v2_experiments as generator
 
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[2] / "archive/legacy_runtime"
     for folder in ("configs", "experiments/implicit-sl"):
         shutil.copytree(root / folder, tmp_path / folder)
     monkeypatch.setattr(generator, "ROOT", tmp_path)

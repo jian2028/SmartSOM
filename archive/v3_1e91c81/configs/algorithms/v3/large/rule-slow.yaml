@@ -1,0 +1,42 @@
+schema: smartsom.algorithm-components/v2
+control: base
+production:
+  default: rule
+  bindings: {}
+  policies:
+    rule:
+      kind: policy
+      observation:
+        target: smartsom.policies.justin.create_observation
+      implementation:
+        target: smartsom.policies.justin.create_policy
+        params:
+          processing_mode: slow
+reward:
+  target: smartsom.rewards.completion.create_reward
+  params:
+    makespan_weight: 1.0
+    tardiness_weight: 1.0
+    scale: 1000.0
+    truncation_fixed_penalty: 10.0
+    truncation_unfinished_weight: 10.0
+action_representation:
+  default: direct
+decision_protocol:
+  reevaluate_ticks: 10
+  time_scale: 200.0
+  distance_scale: 50.0
+  count_scale: 20.0
+  quality_penalty: 1000.0
+  pre:
+    accept:
+      allow_stop: false
+  post:
+    accept:
+      allow_stop: false
+  dispatcher:
+    pickup:
+      allow_empty_wait: false
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover

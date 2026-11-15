@@ -8,19 +8,22 @@ records the observation refactor and historical-source retirement.
 
 The simulator models production, finite buffers, grid AGVs, failures and quality.
 Reservation decisions and centralized direct assignments share physical services.
-Scenario/Algorithm/Experiment authoring, source-frozen execution, current replay,
-Studio, monitoring and complete-update recovery use the current runtime.
+Scenario/Algorithm/Experiment authoring, source-frozen execution, historical replay reading,
+Studio, monitoring and official iteration recovery use the current runtime.
 
-Native PPO/DDQN support Base and implicit SL with shared/independent role ownership.
-Morris is an adapted global-network comparator on reservation decisions. Rule,
-Random, Justin and custom components remain available. Centralized direct-task PPO/Double DQN, custom critic and reward components are
-extended under [ADR0074](decisions/0074-custom-training-components.md).
+Official RLlib PPO/DQN and Tune replace native training for Base and implicit SL.
+The user-approved [core closeout](decisions/0098-rllib-core-closeout.md) covers
+training, fixed panels, official best/last, calibration, whole-run control and
+basic Optuna. ADR0100 adds Rule/Random fixed-panel execution; formal comparator
+campaigns are not launched. Learning standalone evaluation, window/recovery analysis,
+new recording remains deferred. PR42 Morris/E1a-current PPO is being integrated
+under ADR0101; its engineering acceptance is separate from formal experiments.
 
-The active acceptance work is unified observation/Rule interfaces, native-only
-initialization, cleanup of old authored interfaces, independent code review and
-paired performance tests with no representative-case slowdown above 5%. Passing
-engineering tests does not establish convergence or scientific superiority.
-Hosted Linux/macOS CI remains distinct from local evidence.
+Representative three-pair PPO/DQN performance evidence meets the five-percent
+median steady/end-to-end gate. Local Linux owner checks and independent core
+review passed; these remain separate from scientific acceptance. Existing native regressions and historical experiments
+do not establish new framework behavior. Engineering tests do not establish
+convergence or scientific superiority; hosted/platform evidence remains separate.
 
 ## Subsequent research work
 

@@ -106,3 +106,27 @@ def create_reward(
 
 
 create_reward.CONTRACT = "smartsom.reward/v1"
+
+
+class ScaledDefaultReward(StatelessReward):
+    """PR42's default objective with its explicit learner reward scale."""
+
+    def __init__(self, *, orders, quality_penalty, scale):
+        super().__init__(orders=orders, quality_penalty=quality_penalty)
+        self.scale = scale
+
+    def __call__(self, transition):
+        return {"team": self.scale * super().__call__(transition)["team"]}
+
+
+def create_current_reward(*, orders, quality_penalty, scale=0.001):
+    import math
+
+    if not math.isfinite(scale) or scale <= 0:
+        raise ValueError("Morris reward scale must be finite and positive")
+    return ScaledDefaultReward(
+        orders=orders, quality_penalty=quality_penalty, scale=scale
+    )
+
+
+create_current_reward.CONTRACT = "smartsom.reward/v1"

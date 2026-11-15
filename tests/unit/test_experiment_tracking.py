@@ -733,3 +733,36 @@ def test_tracking_panel_requires_matching_training_context():
     assert tracker._panel_identity("dqn", "all", "all") != before
     identity.pop("training_context")
     assert tracker._panel_identity("dqn", "all", "all") is None
+
+
+def test_committed_events_are_not_republished_after_restore(tmp_path):
+    options = TrackingOptions(mode="disabled")
+    tracker = ExperimentTracking(tmp_path, options, job_type="train")
+    tracker.start(manifest(), {})
+    event = {
+        "phase": "train",
+        "event_id": "train/episode/1",
+        "episodes": 1,
+        "physical_ticks": 20,
+    }
+    tracker.log(event)
+    tracker.close()
+    journal = tmp_path / "tracking/events.jsonl"
+    first = journal.read_bytes()
+    state = tmp_path / "tracking/status.json"
+    previous = json.loads(state.read_text())
+    previous["sequence"] = 0  # A crash can leave status behind the flushed journal.
+    state.write_text(json.dumps(previous))
+    resumed = ExperimentTracking(tmp_path, options, job_type="train")
+    resumed.start(manifest(), {})
+    resumed.log(event)
+    assert journal.read_bytes() == first
+    resumed.log({**event, "event_id": "train/episode/2", "episodes": 2})
+    resumed.close()
+    rows = [json.loads(line) for line in journal.read_text().splitlines()]
+    committed = [row for row in rows if row.get("event_id")]
+    assert [row["event_id"] for row in committed] == [
+        "train/episode/1",
+        "train/episode/2",
+    ]
+    assert committed[1]["event_sequence"] > committed[0]["event_sequence"]

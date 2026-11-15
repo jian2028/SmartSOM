@@ -2,11 +2,139 @@
 
 from dataclasses import replace
 from itertools import permutations
+from types import SimpleNamespace
 
 import pytest
 
 from smartsom.algorithms.rule_actions import project, resolve
 from smartsom.domain.base_decisions import BaseCandidate, BaseDecision
+
+
+def speed_request(*, due, work=100, modes=("slow", "normal", "fast")):
+    return replace(
+        decision("machine", "process", *((m, ("job", m)) for m in modes)),
+        inputs={
+            "machine_jobs": {
+                "job": {
+                    "due_ticks": due,
+                    "normal_ticks": 20,
+                    "remaining_normal_ticks": work,
+                }
+            },
+            "candidates": {
+                m: {"nominal_duration": {"slow": 24, "normal": 20, "fast": 16}[m]}
+                for m in modes
+            },
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "due,expected",
+    [
+        (-1, "fast"),
+        (0, "fast"),
+        (99, "fast"),
+        (100, "normal"),
+        (119, "normal"),
+        (120, "slow"),
+        (121, "slow"),
+    ],
+)
+def test_composite_rule_critical_ratio_boundaries(due, expected):
+    from smartsom.policies.rule import BaseRule
+
+    for modes in permutations(("slow", "normal", "fast")):
+        rule = BaseRule()
+        state = rule.get_state()
+        assert rule.choose(speed_request(due=due, modes=modes)) == ("job", expected)
+        assert rule.get_state() == state
+
+
+def test_composite_rule_selects_job_before_speed():
+    from smartsom.policies.rule import BaseRule
+
+    request = speed_request(due=100)
+    request.inputs["machine_jobs"].update(
+        later={"due_ticks": 101, "normal_ticks": 1, "remaining_normal_ticks": 200},
+        earlier={"due_ticks": 99, "normal_ticks": 40, "remaining_normal_ticks": 50},
+    )
+    candidates = list(request.candidates)
+    for job in ("later", "earlier"):
+        for mode, duration in (("slow", 48), ("normal", 40), ("fast", 32)):
+            ident = f"{job}:{mode}"
+            candidates.append(BaseCandidate(ident, (job, mode)))
+            request.inputs["candidates"][ident] = {"nominal_duration": duration}
+    request = replace(request, candidates=tuple(reversed(candidates)))
+    assert BaseRule().choose(request) == ("earlier", "slow")
+    # Equal due dates use normal duration before semantic job ID, independent of
+    # the number/order of speed candidates or their opaque candidate identities.
+    request.inputs["machine_jobs"]["earlier"]["due_ticks"] = 100
+    assert BaseRule().choose(request) == ("job", "normal")
+    request.inputs["machine_jobs"]["earlier"]["normal_ticks"] = 20
+    assert BaseRule().choose(request) == ("earlier", "slow")
+
+
+@pytest.mark.parametrize(
+    "due,modes,expected",
+    [
+        (20, ("normal",), "normal"),
+        (120, ("normal", "fast"), "normal"),
+        (110, ("slow", "fast"), "fast"),
+        (20, ("slow",), "slow"),
+    ],
+)
+def test_composite_rule_never_invents_a_restricted_mode(due, modes, expected):
+    from smartsom.policies.rule import BaseRule
+
+    assert BaseRule().choose(speed_request(due=due, modes=modes)) == ("job", expected)
+
+
+def test_composite_rule_public_work_estimate_uses_current_machine_once():
+    from smartsom.domain.production import ProductionStep
+    from smartsom.observations.rules import create_observation
+    from smartsom.policies.rule import BaseRule
+
+    # Current A takes 10 on the deciding machine; its faster alternative must
+    # not replace that duration. Two future B operations each take ceil(9/2)=5.
+    steps = tuple(
+        ProductionStep(str(i), op, work)
+        for i, (op, work) in enumerate((("A", 10), ("B", 9), ("B", 9)))
+    )
+    facts = SimpleNamespace(
+        tick=7,
+        scales=(200, 50, 20),
+        jobs={"job": {"demand": "order", "step": 0, "location": "pre", "since": 2}},
+        demands={"order": SimpleNamespace(due_at=29, steps=steps)},
+        service_jobs=set(),
+        storage={"pre"},
+        remaining_work=lambda job: 123,
+        nominal=lambda job, owner, mode: {"slow": 12, "normal": 10, "fast": 8}[mode],
+        machines={
+            "owner": SimpleNamespace(
+                operation_types=("A", "B"), processing_rate_multiplier=1
+            ),
+            "other": SimpleNamespace(
+                operation_types=("A", "B"), processing_rate_multiplier=2
+            ),
+        },
+    )
+    request = speed_request(due=22)
+    observed = create_observation()(facts, request)
+    assert observed["machine_jobs"]["job"] == {
+        "due_ticks": 22,
+        "normal_ticks": 10,
+        "remaining_normal_ticks": 20,
+    }
+    assert BaseRule().choose(replace(request, inputs=observed)) == ("job", "normal")
+    # At the final operation, no future operation is included.
+    facts.jobs["job"]["step"] = 2
+    assert (
+        create_observation()(facts, request)["machine_jobs"]["job"][
+            "remaining_normal_ticks"
+        ]
+        == 10
+    )
 
 
 def decision(group, stage, *actions):

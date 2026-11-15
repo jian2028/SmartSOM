@@ -1,0 +1,321 @@
+"""Lossless fixed-space encoding of real production and waiting states."""
+
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+import pytest
+import yaml
+
+from smartsom.config.base_diagnostic import BaseAlgorithm
+from smartsom.learning.factory_episode import FactoryEpisode
+from smartsom.learning.rllib_observation import SUPPLY_FIELDS, V2ObservationCodec
+from smartsom.representations.v2.network import pack
+from tests.unit.test_base_reservations import sim_with
+
+
+def test_rule_action_spaces_do_not_scale_with_physical_job_pairs():
+    from smartsom.learning.rllib_env import FactoryMultiAgentEnv
+
+    root = Path(__file__).resolve().parents[2]
+    document = yaml.safe_load(
+        (root / "configs/algorithms/rllib-base-dqn.yaml").read_text()
+    )
+    for name in ("observation", "network"):
+        document["production"]["policies"]["dqn"][name]["params"] = {
+            "social": {"kind": "implicit", "fusion": "attention"}
+        }
+    options = BaseAlgorithm.model_validate(document)
+    widths = []
+    for jobs in (2, 128):
+        env = FactoryMultiAgentEnv(
+            {
+                "scenario": sim_with(n=jobs).scenario,
+                "options": options,
+                "algorithm": "dqn",
+            }
+        )
+        try:
+            widths.append({group: codec.width for group, codec in env.codecs.items()})
+            if jobs == 128:
+                assert env.codecs["post"].shapes["accept"]["jobs"][0] == 5
+                assert env.codecs["input"].shapes["accept"]["jobs"][0] == 128
+        finally:
+            env.close()
+    assert widths[0] == widths[1]
+    # Seven process rules, three machine modes; two reserved specials and WAIT.
+    assert widths[1]["machine"] == 24
+    # Two stages share one input module: at most six rules plus specials/WAIT.
+    assert widths[1]["input"] == 9
+
+
+@pytest.mark.parametrize("fusion", ["base", "attention", "concat"])
+def test_real_observations_and_waits_preserve_payload(fusion):
+    root = Path(__file__).resolve().parents[2]
+    doc = yaml.safe_load((root / "configs/algorithms/v2-base-ddqn.yaml").read_text())
+    social = (
+        {"kind": "none"} if fusion == "base" else {"kind": "implicit", "fusion": fusion}
+    )
+    if fusion == "concat":
+        social["slots"] = {
+            "stations": 8,
+            "vehicles": 8,
+            "input_jobs": 2,
+            "post_jobs": 2,
+        }
+    policy = doc["production"]["policies"]["dqn"]
+    policy["observation"]["params"] = {"social": social}
+    policy["network"]["params"] = {"social": social}
+    options = BaseAlgorithm.model_validate(doc)
+    episode = FactoryEpisode(sim_with(n=2).scenario, options)
+    codecs = {}
+    examples = {}
+    checks = waits = 0
+    checked_distinct_supply = False
+
+    def codec(request):
+        group = request.group + (
+            "." + request.stage if request.group == "dispatcher" else ""
+        )
+        if group not in codecs:
+            codecs[group] = V2ObservationCodec(
+                group,
+                options=options,
+                actions=32,
+                stations=8,
+                vehicles=8,
+                jobs=2,
+                social=social,
+            )
+        return codecs[group]
+
+    while True:
+        frame = episode.frame
+        if frame.request is not None:
+            request = frame.request
+            encoder = codec(request)
+            obs = encoder.encode(request)
+            if (
+                not checked_distinct_supply
+                and fusion != "base"
+                and request.group in {"input", "post"}
+                and request.stage == "accept"
+                and len(request.inputs["social"]) > 1
+                and request.inputs["social"][1]["jobs"]
+            ):
+                relations = list(request.inputs["social"])
+                relation = dict(relations[1])
+                jobs = list(relation["jobs"])
+                job = dict(jobs[0])
+                values = job["condition"]
+                job["condition"] = (values[0] + 1, *values[1:])
+                jobs[0] = job
+                relation["jobs"] = tuple(jobs)
+                relations[1] = relation
+                with pytest.raises(ValueError, match="supply differs"):
+                    encoder.encode(
+                        replace(
+                            request,
+                            inputs={**request.inputs, "social": tuple(relations)},
+                        )
+                    )
+                checked_distinct_supply = True
+            examples.setdefault(encoder.group, {})["production"] = obs
+            if checks == 0:
+                for bad in (
+                    replace(request, group="wrong"),
+                    replace(request, stage="wrong"),
+                ):
+                    with pytest.raises(ValueError, match="role/stage"):
+                        encoder.encode(bad)
+                    with pytest.raises(ValueError, match="role/stage"):
+                        encoder.decode(bad, 1)
+                wrong_social = (
+                    {
+                        "kind": "implicit",
+                        "fusion": "concat",
+                        "slots": {
+                            "stations": 8,
+                            "vehicles": 8,
+                            "input_jobs": 2,
+                            "post_jobs": 2,
+                        },
+                    }
+                    if fusion != "concat"
+                    else {"kind": "implicit", "fusion": "attention"}
+                )
+                with pytest.raises(ValueError, match="configuration mismatch"):
+                    V2ObservationCodec(
+                        encoder.group,
+                        options=options,
+                        actions=32,
+                        stations=8,
+                        vehicles=8,
+                        jobs=2,
+                        social=wrong_social,
+                    )
+                if fusion != "base":
+                    with pytest.raises(ValueError, match="social schema"):
+                        encoder.encode(
+                            replace(request, inputs={**request.inputs, "social": ()})
+                        )
+            assert encoder.observation_space.contains(obs)
+            assert not obs["action_mask"][0]
+            assert obs["action_mask"].sum() == len(request.candidates)
+            old = pack([request], critics=None, options=options)["stages"][
+                request.stage
+            ]
+            actual = obs["stages"][request.stage]
+            for key, tensor in old.items():
+                if key == "indices":
+                    continue
+                expected = tensor[0].numpy()
+                target = (
+                    np.broadcast_to(
+                        actual[key], (expected.shape[0], *actual[key].shape)
+                    )
+                    if key in SUPPLY_FIELDS
+                    else actual[key]
+                    if key == "context"
+                    else actual[key][1:]
+                )
+                np.testing.assert_array_equal(
+                    target[tuple(slice(0, n) for n in expected.shape)], expected
+                )
+            for index, candidate in enumerate(request.candidates, 1):
+                assert encoder.decode(request, index) == candidate.identity
+            with pytest.raises(ValueError):
+                encoder.decode(request, 0)
+            checks += 1
+            episode.act(encoder.decode(request, 1))
+        else:
+            for context in frame.waiting:
+                encoder = codec(context)
+                obs = encoder.encode_wait(episode.protocol, context)
+                examples.setdefault(encoder.group, {})["waiting"] = obs
+                with pytest.raises(ValueError, match="role/stage"):
+                    encoder.encode_wait(
+                        episode.protocol, replace(context, group="wrong")
+                    )
+                assert encoder.observation_space.contains(obs)
+                assert obs["waiting"].tolist() == [1]
+                assert np.flatnonzero(obs["action_mask"]).tolist() == [0]
+                waits += 1
+            if frame.terminated or frame.truncated:
+                break
+            episode.wait()
+    assert checks > 0 and waits > checks
+    assert fusion == "base" or checked_distinct_supply
+    episode.close()
+    verify_official_modules(codecs, examples, social)
+
+
+def verify_official_modules(codecs, examples, social):
+    from dataclasses import asdict
+
+    import gymnasium as gym
+    import torch
+    import tree
+    from ray.rllib.algorithms.dqn import DQNConfig
+    from ray.rllib.algorithms.dqn.torch.default_dqn_torch_rl_module import (
+        DefaultDQNTorchRLModule,
+    )
+    from ray.rllib.algorithms.dqn.torch.dqn_torch_learner import DQNTorchLearner
+    from ray.rllib.algorithms.ppo.torch.default_ppo_torch_rl_module import (
+        DefaultPPOTorchRLModule,
+    )
+    from ray.rllib.core.columns import Columns
+    from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
+
+    from smartsom.learning.rllib_models import ResearchDQNCatalog, ResearchPPOCatalog
+
+    torch.set_num_threads(1)
+    for group, rows in examples.items():
+        codec = codecs[group]
+        obs = tree.map_structure(
+            lambda *values: torch.as_tensor(np.stack(values)),
+            rows["production"],
+            rows["waiting"],
+        )
+        config = asdict(DefaultModelConfig()) | dict(DQNConfig().model_config)
+        config.update(
+            research_group=group, research_social=social, research_stages=codec.stages
+        )
+        torch.manual_seed(101)
+        dqn = DefaultDQNTorchRLModule(
+            observation_space=codec.observation_space,
+            action_space=codec.action_space,
+            model_config=config,
+            catalog_class=ResearchDQNCatalog,
+        )
+        dqn.make_target_networks()
+        batch = {Columns.OBS: obs, Columns.NEXT_OBS: obs}
+        mask = obs["action_mask"].bool()
+        result = dqn.forward_train(batch)
+        for key in ("qf_preds", "qf_next_preds", "qf_target_next_preds"):
+            assert torch.isfinite(result[key][mask]).all()
+            assert torch.isneginf(result[key][~mask]).all()
+        # A numerical loss fixture, not a change to the factory's reward.
+        # Truncation retains bootstrap; only true termination removes it.
+        actions = mask.long().argmax(-1)
+        loss_batch = {
+            Columns.ACTIONS: actions,
+            Columns.REWARDS: torch.full((2,), 0.37),
+            Columns.TERMINATEDS: torch.zeros(2, dtype=torch.bool),
+            Columns.TRUNCATEDS: torch.ones(2, dtype=torch.bool),
+            "n_step": torch.ones(2),
+            "weights": torch.ones(2),
+        }
+        loss_config = DQNConfig()
+        loss_learner = DQNTorchLearner(config=loss_config, module=dqn)
+        actual_loss = loss_learner.compute_loss_for_module(
+            module_id="default_policy",
+            config=loss_config,
+            batch=loss_batch,
+            fwd_out=result,
+        )
+        next_values = []
+        for row in range(2):
+            legal = torch.where(mask[row])[0]
+            greedy = legal[result["qf_next_preds"][row, legal].argmax()]
+            next_values.append(result["qf_target_next_preds"][row, greedy])
+        target = (
+            loss_batch[Columns.REWARDS] + loss_config.gamma * torch.stack(next_values)
+        ).detach()
+        predicted = result["qf_preds"].gather(1, actions[:, None]).squeeze(1)
+        assert not torch.isclose(
+            torch.nn.functional.huber_loss(predicted, target),
+            torch.nn.functional.huber_loss(predicted, loss_batch[Columns.REWARDS]),
+        ), "bootstrap oracle must distinguish truncation from termination"
+        torch.testing.assert_close(
+            actual_loss, torch.nn.functional.huber_loss(predicted, target)
+        )
+        for timestep in (0, 1000000):
+            for _ in range(8):
+                actions = dqn.forward_exploration(batch, t=timestep)[Columns.ACTIONS]
+                assert mask.gather(1, actions[:, None]).all()
+        ppo_space = gym.spaces.Dict(
+            {
+                **codec.observation_space.spaces,
+                "critic": gym.spaces.Box(-np.inf, np.inf, (48,), dtype=np.float32),
+            }
+        )
+        ppo = DefaultPPOTorchRLModule(
+            observation_space=ppo_space,
+            action_space=codec.action_space,
+            model_config=config,
+            catalog_class=ResearchPPOCatalog,
+        )
+        ppo_obs = {**obs, "critic": torch.zeros(2, 48)}
+        first = ppo.forward_train({Columns.OBS: ppo_obs})[Columns.ACTION_DIST_INPUTS]
+        second = ppo.forward_train(
+            {Columns.OBS: {**ppo_obs, "critic": torch.ones(2, 48)}}
+        )[Columns.ACTION_DIST_INPUTS]
+        torch.testing.assert_close(first, second)
+        assert torch.isfinite(first[mask]).all() and torch.isneginf(first[~mask]).all()
+        values = ppo.compute_values({Columns.OBS: ppo_obs})
+        assert torch.isfinite(values).all()
+        assert not torch.equal(
+            values,
+            ppo.compute_values({Columns.OBS: {**ppo_obs, "critic": torch.ones(2, 48)}}),
+        )

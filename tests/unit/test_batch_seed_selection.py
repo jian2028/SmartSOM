@@ -2,12 +2,11 @@
 
 import pytest
 
-from smartsom.experiments import author_batch, batch_append, runtime_control
+from smartsom.experiments import author_batch
 from smartsom.experiments.batch_selection import parse_selector
 from smartsom.experiments.cli import _parser
 from smartsom.experiments.evidence import write_json
 from smartsom.experiments.launch import compile_launch, run_launch
-from tests.unit.test_batch_growth_order import add_large
 from tests.unit.test_incremental_batch import batch, hashes
 from tests.unit.test_incremental_batch import lightweight as _lightweight
 
@@ -43,11 +42,11 @@ def test_user_chain_subsets_full_resume_and_new_members(tmp_path, lightweight):
         "train_seeds: [4102, 4103]",
     )
     run_launch(first)
-    assert lightweight == [
+    assert set(lightweight) == {
         "medium-sl--seed-4101",
         "medium-base--seed-4102",
         "medium-base--seed-4103",
-    ]
+    }
     root = first.output_root
     old = hashes(root / "trials/medium-base/seed-4102")
     assert {row["compiled"].experiment.train_seeds for row in first.files} == {
@@ -57,10 +56,6 @@ def test_user_chain_subsets_full_resume_and_new_members(tmp_path, lightweight):
     assert result["completed_tasks"] == 12 and result["submitted_tasks"] == 9
     assert len(lightweight) == len(set(lightweight)) == 12
     assert run_launch(from_cli(folder, "--resume-missing"))["submitted_tasks"] == 0
-    add_large(folder)
-    result = run_launch(from_cli(folder, "--resume-missing"))
-    assert result["completed_tasks"] == 18 and result["submitted_tasks"] == 6
-    assert len(lightweight) == len(set(lightweight)) == 18
     assert hashes(root / "trials/medium-base/seed-4102") == old
 
 
@@ -182,50 +177,13 @@ def test_failure_recovery_validates_before_any_activation(tmp_path, lightweight)
     original = model.read_bytes()
     model.write_bytes(b"corrupt")
     before = hashes(root)
-    with pytest.raises(ValueError, match="digest mismatch"):
+    with pytest.raises(ValueError, match="require resume or retry"):
         run_launch(from_cli(folder, "--resume-missing"))
     assert hashes(root) == before
     model.write_bytes(original)
-    result = run_launch(from_cli(folder, "--resume-missing"))
-    assert result["completed_tasks"] == 12
-    assert lightweight.count("medium-base--seed-4101") == 2  # explicit compatible retry
-
-
-def test_manual_hold_blocks_without_clearing_or_allocating(tmp_path, lightweight):
-    folder = batch(tmp_path)
-    run_launch(from_cli(folder, "--id", "medium-base", "--first-train-seeds", "1"))
-    root = folder.parent / "results"
-    with runtime_control.transaction(root) as control:
-        control["paused_tasks"] = ["small-sl--seed-4101"]
-    before = hashes(root)
-    with pytest.raises(ValueError, match="manual holds"):
+    with pytest.raises(ValueError, match="require resume or retry"):
         run_launch(from_cli(folder, "--resume-missing"))
-    assert hashes(root) == before
-
-
-def test_active_append_honors_disjoint_repeated_id_selection(tmp_path, lightweight):
-    from tests.unit.test_batch_append_ownership import open_queue
-
-    folder = batch(tmp_path)
-    root = open_queue(folder)
-    add_large(folder)
-    receipt = batch_append.append(
-        root,
-        folder,
-        ids=["large-sl", "large-base", "large-sl"],
-        selectors=[
-            {"train_seeds": [4103]},
-            {"train_seeds": [4101]},
-            {"train_seeds": [4101]},
-        ],
-    )
-    assert receipt["tasks"] == [
-        "large-sl--seed-4103",
-        "large-base--seed-4101",
-        "large-sl--seed-4101",
-    ]
-    _, _, saved = author_batch.load(root)
-    assert saved["files"]["large-sl--seed-4102"]["status"] == "deferred"
+    assert lightweight.count("medium-base--seed-4101") == 1
 
 
 @pytest.mark.parametrize("local", [True, False])
@@ -243,21 +201,6 @@ def test_parent_run_override_cannot_bypass_seed_conflict(tmp_path, local):
         )
 
 
-def test_api_id_only_append_uses_owned_selection_path(tmp_path, monkeypatch):
-    folder = batch(tmp_path)
-    root = tmp_path / "legacy-parent"
-    root.mkdir()
-    write_json(root / "plan.json", {"incremental": False})
-    calls = []
-    monkeypatch.setattr(
-        batch_append,
-        "append",
-        lambda *args, **kwargs: calls.append(kwargs) or {"routed": True},
-    )
-    assert runtime_control.append(root, folder, ids=["medium-sl"]) == {"routed": True}
-    assert calls[0]["ids"] == ["medium-sl"]
-
-
 def test_run_directory_rejects_file_only_selector(tmp_path):
     from smartsom.experiments.cli import main
 
@@ -270,3 +213,28 @@ def test_check_and_run_share_file_selection_syntax(command):
         [command, "experiment.yaml", "--select", "train_seeds: [4101]"]
     )
     assert args.file_selector == {"train_seeds": [4101]}
+
+
+def test_standalone_file_expands_every_training_seed(tmp_path):
+    import yaml
+
+    from tests.helpers.algorithm import rllib_recipe as recipe
+    from tests.unit.test_algorithm_components import author
+
+    path = author(tmp_path, recipe("ppo"))
+    document = yaml.safe_load(path.read_text())
+    document.setdefault("run", {})["task"] = "train"
+    document["train_seeds"] = [71, 73]
+    document["drain_frozen"] = True
+    path.write_text(yaml.safe_dump(document))
+    plan = compile_launch(path)
+    assert [row["compiled"].experiment.run.seed for row in plan.files] == [71, 73]
+    assert len({row["child"] for row in plan.files}) == 2
+    assert len({row["scientific_sha256"] for row in plan.files}) == 2
+    document["train_seeds"] = [71]
+    path.write_text(yaml.safe_dump(document))
+    singleton = compile_launch(path)
+    assert singleton.experiment.run.seed == 71
+    one = compile_launch(path, seed=73)
+    assert one.experiment.run.seed == 73
+    assert one.experiment.train_seeds == (73,)

@@ -423,18 +423,11 @@ def runtime_lines(summary, *, controlling=False, condensed=False):
     rows = [
         f"控制 · {meaning} {shown(target)} · 实际运行 {shown(active)} · {state.get('status', 'unknown')}"
         + (" · 自然收缩中" if draining else ""),
-        ("可控制 · +/- 调整" if controlling else "只读 monitor")
-        + f" · {meaning} · CPU/内存预算保护（非操作系统硬隔离）",
+        "只读资源观测" + f" · {meaning} · 逻辑资源声明（非操作系统硬隔离）",
         "阻塞原因 · " + (state.get("blocking_reason") or "无"),
         "队列 · " + ("排空后等待追加" if state.get("keep_open") else "排空自动结束"),
     ]
     return rows[:2] if condensed else rows
-
-
-def control_footer(view, summary):
-    if view.controlling and summary.get("runtime_control"):
-        return "+/- 并发 · c 数值 · 空格 全局暂停/继续 · P 暂停 · R 恢复/重试选中 · U 重试全部 · D 移除确认 · "
-    return "c 修改总并发 · " if summary.get("manual") and view.controlling else ""
 
 
 def manual_lines(summary, *, condensed=False):
@@ -1040,16 +1033,10 @@ def runtime_help(view):
     ]
     if view.controlling:
         content += [
-            "调度控制（前台运行 / attach）",
-            "+/- 并发：提交相对变化；c 数值：输入目标并发",
-            "空格 全局暂停/继续；个别任务的暂停保持不变",
-            "P 暂停选中；R 恢复选中或重试失败；U 重试全部暂停/失败；恢复等待资源",
-            "Q 优先队列：↑/↓ 选任务；Enter 加入/取消；←/→ 前移/后移；Esc 返回",
-            "优先队列只影响未启动任务；资源与依赖满足后按指定顺序启动",
-            "D 移除确认：仅列表可用，输入目标短 ID；保留文件",
+            "整批控制（前台运行 / attach）",
             "q / Ctrl+C 退出菜单：1 / Enter 停止并保留；2 停止后删除；Esc 取消",
-            "任务自动离开当前筛选后，必须重新选择再控制",
-            "模式、资源预算、追加任务及关闭队列使用 batch-* CLI",
+            "整批暂停/恢复使用 smartsom pause/resume；固定实验重试使用 retry --all",
+            "并发与资源在启动时设置；任务调度和执行顺序由 Tune 决定",
         ]
     else:
         content += [
@@ -1938,10 +1925,6 @@ def render(view):
                 line(value, "cyan")
                 for value in manual_lines(summary, condensed=condensed)
             )
-            if view.controlling:
-                stage_items.append(
-                    line("c 修改总并发 · 输入数字后 Enter 确认 · d 离开界面", "dim")
-                )
         if online:
             if tiny:
                 stage_items = [
@@ -2087,8 +2070,7 @@ def render(view):
         short_header=short,
         title=line(view.options.title or f"SmartSOM · {view.name}"),
         subtitle=line(f"{STAGES.get(stage, stage)} [{view.status}]"),
-        footer=control_footer(view, summary)
-        + (
+        footer=(
             "q / Ctrl+C 退出菜单 · d 仅离开界面"
             if view.controlling
             else "d 离开界面 · Ctrl+C×2 关闭监控"

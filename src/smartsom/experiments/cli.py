@@ -46,14 +46,13 @@ def _launch_arguments(command, *, advanced=False, check=False):
     command.add_argument(
         "--evaluation-processes",
         type=int,
-        help="independent native evaluation cases per panel (default: 1)",
+        help="evaluation workers per fixed panel at launch (default: 1)",
     )
     command.add_argument(
         "--evaluation-cpus",
         type=int,
         help="total CPU cap per experiment evaluation panel",
     )
-    command.add_argument("--concurrency-mode", choices=("manual", "adaptive"))
     command.add_argument("--cpus", type=float)
     command.add_argument("--memory-gib", type=float)
     command.add_argument("--wandb", choices=("online", "offline", "disabled"))
@@ -77,7 +76,6 @@ def _launch_arguments(command, *, advanced=False, check=False):
         group.add_argument("--learning-rate", type=float)
         group.add_argument("--checkpoint")
         group.add_argument("--name")
-        group.add_argument("--tune", choices=("off", "recommend", "auto"))
 
 
 def _operation_overrides(args):
@@ -86,7 +84,6 @@ def _operation_overrides(args):
         ("max_concurrent", "concurrency", "max_concurrent"),
         ("evaluation_processes", "concurrency", "evaluation_processes"),
         ("evaluation_cpus", "concurrency", "evaluation_cpus"),
-        ("concurrency_mode", "concurrency", "mode"),
         ("cpus", "resources", "cpus"),
         ("memory_gib", "resources", "memory_gib"),
         ("wandb", "tracking", "mode"),
@@ -115,6 +112,9 @@ def _parser():
         prog="smartsom",
         description="One experiment runtime; frozen scientific inputs and explicit operational controls.",
     )
+    parser.set_defaults(
+        task_id=None, command_id=None, expected_revision=None, keep_open=False
+    )
     commands = parser.add_subparsers(
         dest="command", required=True, parser_class=parser_type
     )
@@ -123,6 +123,7 @@ def _parser():
         command.set_defaults(_allow_file_select=True, file_selector=None)
         command.add_argument("run_config", nargs="?")
         command.add_argument("--config")
+        command.add_argument("--search", type=Path)
         _launch_arguments(command, advanced=True, check=name == "check")
         command.add_argument(
             "--id",
@@ -137,7 +138,6 @@ def _parser():
             help="YAML train_seeds execution subset for preceding --id (or run FILE); lists are actual seeds, integers count from 101",
         )
         command.add_argument("--tag", action="append", dest="batch_tags")
-        command.add_argument("--keep-open", action="store_true")
         command.add_argument(
             "--first-train-seeds",
             type=int,
@@ -151,9 +151,6 @@ def _parser():
     command = commands.add_parser("resume")
     command.add_argument("source")
     command.add_argument("--root", action="append")
-    command.add_argument("--task-id", dest="task_id")
-    command.add_argument("--command-id")
-    command.add_argument("--expected-revision", type=int)
     _launch_arguments(command)
     for name in (
         "status",
@@ -171,11 +168,6 @@ def _parser():
             command.add_argument("--timeout", type=float)
             command.add_argument("--force", action="store_true")
 
-        if name in {"pause", "stop", "status"}:
-            command.add_argument("--task-id", dest="task_id")
-            command.add_argument("--command-id")
-        if name in {"pause", "stop"}:
-            command.add_argument("--expected-revision", type=int)
         if name == "status":
             command.add_argument("--json", action="store_true")
         if name in {"monitor", "attach"}:
@@ -220,49 +212,17 @@ def _parser():
     command.add_argument(
         "--seed", type=int, help="historical seed; inferred only when unique"
     )
-    for action in ("add", "close", "remove", "configure"):
-        command = commands.add_parser(action)
-        command.add_argument("queue", type=Path)
-        command.add_argument("--command-id")
-        command.add_argument("--expected-revision", type=int)
-        if action in {"remove", "configure"}:
-            command.add_argument(
-                "--task-id", dest="task_id", required=action == "remove"
-            )
-        if action == "add":
-            command.add_argument("directory", type=Path)
-            command.add_argument("--first-train-seeds", type=int)
-            command.add_argument("--output-root", type=Path)
-            command.add_argument("--id", action=EntryAction, dest="batch_ids")
-            command.add_argument(
-                "--select", action=SelectAction, dest="batch_selectors"
-            )
-            command.add_argument("--tag", action="append", dest="batch_tags")
-        if action == "configure":
-            command.add_argument("--max-concurrent", type=int)
-            command.add_argument("--concurrency-mode", choices=("manual", "adaptive"))
-            command.add_argument("--evaluation-processes", type=int)
-            command.add_argument("--evaluation-cpus", type=int)
-            command.add_argument("--cpus", type=float)
-            command.add_argument("--memory-gib", type=float)
-        if action == "remove":
-            command.add_argument("--show-target", action="store_true")
-            command.add_argument("--batch-id")
-            command.add_argument("--confirm-target")
     command = commands.add_parser(
         "retry", help="retry failed work; paused work uses resume"
     )
     command.add_argument("queue", type=Path)
     _launch_arguments(command)
-    selection = command.add_mutually_exclusive_group()
-    selection.add_argument(
-        "--task-id", dest="task_id", help="exact failed task ID in a live batch"
-    )
-    selection.add_argument(
+    command.add_argument(
         "--all",
         dest="all_tasks",
         action="store_true",
-        help="select failed tasks in the batch",
+        required=True,
+        help="restore failed and unfinished trials with Tune",
     )
     command.add_argument(
         "--preview", action="store_true", help="inspect selection without submitting"
@@ -273,7 +233,6 @@ def _parser():
     )
     command.add_argument("queue", type=Path)
     command.add_argument("--root", action="append")
-    command.add_argument("--task-id", dest="task_id")
     choice = command.add_mutually_exclusive_group(required=True)
     choice.add_argument(
         "--show-target",
@@ -331,112 +290,6 @@ def _dispatch(args, parser):
     }
     with display_options(**options):
         return _execute_args(args, parser)
-
-
-def _remove_task(args):
-    from smartsom.experiments import runtime_control
-
-    if args.command_id and not args.show_target:
-        prior = (
-            runtime_control.snapshot(args.queue)
-            .get("commands", {})
-            .get(args.command_id)
-        )
-        if prior is not None:
-            payload = prior["payload"]
-            if (
-                payload.get("kind") != "remove"
-                or payload.get("task_id") != args.task_id
-                or payload.get("value") is not None
-            ):
-                raise ValueError("command ID reused with different payload")
-            confirmation = payload["confirmation"]
-            revision = prior["revision"] - 1
-            batch_id = Path(args.queue).expanduser().resolve().name
-            if (
-                (
-                    (not sys.stdin.isatty() or args.batch_id is not None)
-                    and args.batch_id != batch_id
-                )
-                or (
-                    (not sys.stdin.isatty() or args.confirm_target is not None)
-                    and args.confirm_target != confirmation
-                )
-                or (
-                    (not sys.stdin.isatty() or args.expected_revision is not None)
-                    and args.expected_revision != revision
-                )
-            ):
-                raise ValueError(
-                    "removal retry requires the original target confirmation"
-                )
-            return runtime_control.submit(
-                args.queue,
-                "remove",
-                task_id=args.task_id,
-                command_id=args.command_id,
-                expected_revision=revision,
-                confirmation=confirmation,
-            )
-    target = runtime_control.removal_target(args.queue, args.task_id)
-    if args.show_target:
-        return target
-    if sys.stdin.isatty():
-        print(json.dumps(target, ensure_ascii=False, indent=2), file=sys.stderr)
-        print(
-            "Remove this task from future scheduling; running work waits for a safe checkpoint. Files remain. Type the exact short_id to confirm; blank input cancels:",
-            file=sys.stderr,
-        )
-        try:
-            typed = input()
-        except (EOFError, KeyboardInterrupt):
-            return {"status": "cancelled", "task_id": args.task_id}
-        if typed != target["short_id"]:
-            return {"status": "cancelled", "task_id": args.task_id}
-        confirmation, revision = target["confirmation"], target["revision"]
-    else:
-        if (
-            args.batch_id != target["batch_id"]
-            or args.confirm_target != target["confirmation"]
-            or args.expected_revision != target["revision"]
-        ):
-            raise ValueError(
-                "noninteractive removal requires exact --batch-id, --task-id, --confirm-target and --expected-revision from --show-target"
-            )
-        confirmation, revision = args.confirm_target, args.expected_revision
-    return runtime_control.submit(
-        args.queue,
-        "remove",
-        task_id=args.task_id,
-        command_id=args.command_id,
-        expected_revision=revision,
-        confirmation=confirmation,
-    )
-
-
-def _submit_control(args, kind):
-    from smartsom.experiments import runtime_control
-
-    if kind == "resume":
-        from smartsom.experiments import control
-
-        owner = control.read(args.source)
-        if (
-            not owner
-            or owner.get("status") not in control.ACTIVE
-            or not control.alive(owner["owner"], control.processes())
-        ):
-            raise ValueError(
-                "batch driver is not running; resume the whole run before scoped/journal resume"
-            )
-    return runtime_control.submit(
-        args.source,
-        kind,
-        value=None,
-        task_id=args.task_id,
-        command_id=args.command_id,
-        expected_revision=args.expected_revision,
-    )
 
 
 def _status(args):
@@ -570,14 +423,9 @@ def _execute_args(args, parser):
 
             payload = compare(args.left, args.right, roots=args.root)
         elif args.command == "pause":
-            from smartsom.experiments import control, runtime_control
+            from smartsom.experiments import control
 
-            if args.task_id or runtime_control.snapshot(args.source):
-                payload = _submit_control(args, "pause")
-            else:
-                if args.command_id or args.expected_revision is not None:
-                    raise ValueError("journal options require a batch runtime")
-                payload = control.request_pause(args.source)
+            payload = control.request_pause(args.source)
         elif args.command == "results":
             payload = catalog.results(
                 args.source,
@@ -592,149 +440,36 @@ def _execute_args(args, parser):
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         return 0
     if args.command == "retry":
-        from smartsom.experiments import batch_retry, runtime_control
-        from smartsom.experiments.catalog import require_current, resolve_run
+        from smartsom.api import resume
+        from smartsom.experiments.background import _check_owner
+        from smartsom.experiments.catalog import read_json, require_current, resolve_run
 
-        queue = resolve_run(args.queue)
-        require_current(queue)
-        if not args.preview and not runtime_control._RETRY_ENABLED:
-            raise ValueError("live retry is not yet enabled; task state was retained")
-        from smartsom.experiments import control
+        root = resolve_run(args.queue)
+        require_current(root)
+        if (root / "search.json").is_file():
+            from smartsom.config.search import reject_failed_retry
 
-        owner = control.read(queue)
-        state = runtime_control.snapshot(queue)
-        live = bool(
-            owner
-            and owner.get("status") in control.ACTIVE
-            and control.alive(owner["owner"], control.processes())
-        )
-        if state and live and state.get("status") not in runtime_control.TERMINAL:
-            if not args.all_tasks and not args.task_id:
-                raise ValueError("batch retry requires --all or --task-id")
-            if _operation_overrides(args) or args.profile:
-                raise ValueError("live retry cannot change settings; use configure")
+            reject_failed_retry(True)
+        _check_owner(root)
+        if args.preview:
+            payload = {
+                "directory": str(root),
+                "status": "preview",
+                "state": read_json(root / "batch.json"),
+            }
         else:
-            if live:
-                raise ValueError("run is still active; wait for failure recovery")
-            if args.task_id:
-                raise ValueError(
-                    "ended batch recovery requires retry --all; exact task retry requires a live driver"
-                )
-            if state and not args.all_tasks:
-                raise ValueError("ended batch retry requires --all")
-            from smartsom.experiments.catalog import read_json
-
-            failed = any(
-                read_json(queue / name).get("status") == "failed"
-                for name in ("batch.json", "progress.json")
-            )
-            if state:
-                failed = failed or any(
-                    job.get("status") == "failed"
-                    for job in {
-                        **state.get("tasks", {}),
-                        **state.get("additions", {}),
-                    }.values()
-                )
-            if args.preview or not failed:
-                print(
-                    json.dumps(
-                        {
-                            "directory": str(queue),
-                            "status": "preview" if args.preview else "no_failed_tasks",
-                            "failed": failed,
-                        }
-                    )
-                )
-                return 0
-            from smartsom.api import resume
-
             payload = resume(
-                queue,
+                root,
                 background=args.background,
                 retry_failed=True,
                 profile=args.profile,
                 operations=_operation_overrides(args),
                 interactive=sys.stdin.isatty() and sys.stdout.isatty(),
             )
-            print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-            return int(
-                payload.get("status") in {"failed", "stopped", "partial_stopped"}
-            )
-        preview = batch_retry.preview_failed(
-            queue, [args.task_id] if args.task_id else None
-        )
-        if args.preview:
-            payload = preview
-        else:
-            print(
-                json.dumps({"preview": preview}, ensure_ascii=False, indent=2),
-                file=sys.stderr,
-                flush=True,
-            )
-            payload = batch_retry.submit_preview(queue, preview)
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-        return (
-            1
-            if any(
-                item.get("status") == "rejected" for item in payload.get("outcomes", [])
-            )
-            else 0
-        )
+        return int(payload.get("status") == "failed")
     if args.command == "clean":
-        from smartsom.experiments import batch_cleanup
-        from smartsom.experiments.catalog import require_current, resolve_run
-
-        if not args.task_id:
-            return _clean_run(args)
-        queue = resolve_run(args.queue, args.root)
-        require_current(queue)
-        payload = (
-            batch_cleanup.preview(queue, args.task_id)
-            if args.show_target
-            else batch_cleanup.delete(queue, args.task_id, args.confirm_target)
-        )
-        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-        return 0
-    if args.command in {"add", "close", "remove", "configure"}:
-        from smartsom.experiments import runtime_control
-        from smartsom.experiments.catalog import require_current, resolve_run
-
-        args.queue = resolve_run(args.queue)
-        require_current(args.queue)
-        if args.command == "add":
-            payload = runtime_control.append(
-                args.queue,
-                args.directory,
-                first_train_seeds=args.first_train_seeds,
-                output_root=args.output_root,
-                ids=args.batch_ids,
-                selectors=args.batch_selectors,
-                tags=args.batch_tags,
-                command_id=args.command_id,
-                expected_revision=args.expected_revision,
-            )
-        elif args.command == "remove":
-            payload = _remove_task(args)
-        else:
-            value = None
-            if args.command == "configure":
-                value = {
-                    key: getattr(args, key)
-                    for key in runtime_control.CONFIGURE_FIELDS
-                    if getattr(args, key, None) is not None
-                }
-                runtime_control.validate_configuration(value, args.task_id)
-            payload = runtime_control.submit(
-                args.queue,
-                args.command,
-                value=value,
-                task_id=getattr(args, "task_id", None),
-                command_id=args.command_id,
-                expected_revision=args.expected_revision,
-            )
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return int(payload.get("status") == "rejected")
+        return _clean_run(args)
 
     if args.command in {"check", "run"}:
         from smartsom.experiments.launch import compile_launch, run_launch
@@ -778,6 +513,7 @@ def _execute_args(args, parser):
                 )
         plan = compile_launch(
             source,
+            search=args.search,
             ids=ids,
             selectors=selectors,
             tags=args.batch_tags,
@@ -786,13 +522,12 @@ def _execute_args(args, parser):
             sets=changes,
             task=args.task,
             seed=args.seed,
-            tuning=args.tune,
             learning_rate=args.learning_rate,
             profile=args.profile,
             operations=_operation_overrides(args),
         )
         if args.command == "check":
-            if args.json:
+            if args.json or args.search is not None:
                 print(
                     json.dumps(
                         plan.summary(), ensure_ascii=False, indent=2, default=str
@@ -813,26 +548,6 @@ def _execute_args(args, parser):
     elif args.command == "resume":
         from smartsom.api import resume
 
-        if args.task_id:
-            from smartsom.experiments.catalog import require_current, resolve_run
-
-            args.source = resolve_run(args.source, args.root)
-            require_current(args.source)
-            if _operation_overrides(args) or args.profile:
-                raise ValueError("task resume cannot change settings; use configure")
-            payload = _submit_control(args, "resume")
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
-            return int(payload.get("status") == "rejected")
-        if args.command_id or args.expected_revision is not None:
-            from smartsom.experiments.catalog import require_current, resolve_run
-
-            args.source = resolve_run(args.source, args.root)
-            require_current(args.source)
-            if _operation_overrides(args) or args.profile:
-                raise ValueError("journal resume cannot change settings; use configure")
-            payload = _submit_control(args, "resume")
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
-            return int(payload.get("status") == "rejected")
         payload = resume(
             args.source,
             background=args.background,
@@ -844,22 +559,11 @@ def _execute_args(args, parser):
     elif args.command == "stop":
         from smartsom.experiments.control import stop
 
-        if args.task_id:
-            if args.force or args.timeout is not None:
-                raise ValueError(
-                    "task stop is cooperative; --force/--timeout apply only to the whole run"
-                )
-            payload = _submit_control(args, "stop")
-        else:
-            if args.command_id or args.expected_revision is not None:
-                raise ValueError(
-                    "whole-run stop verifies process exit; journal options require --task-id"
-                )
-            payload = stop(
-                args.source,
-                timeout=30 if args.timeout is None else args.timeout,
-                force=args.force,
-            )
+        payload = stop(
+            args.source,
+            timeout=30 if args.timeout is None else args.timeout,
+            force=args.force,
+        )
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return int(
             bool(payload.get("remaining")) or payload.get("status") == "rejected"

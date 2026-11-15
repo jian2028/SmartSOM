@@ -34,11 +34,13 @@ engine regardless of the selected observation or controller.
 
 ## Learning, ownership and recovery
 
-Native PPO and masked Double DQN retain separate heads/losses and applicable
-shared encoders. Parameter ownership can be shared or independent by role.
-Only native initialization is supported. Complete checkpoints include optimizer,
-randomness, counters and DQN replay/targets; incomplete rollouts restart at a
-committed update boundary. The v4 checkpoint contract rejects historical layouts.
+Official RLlib PPO/DQN Algorithms own sampling, losses, updates and optimizer
+state. Base/SL research RLModules own observations, candidate masks and social
+representations. Parameter sharing uses official agent-to-module mappings.
+Official checkpoints retain model/optimizer/counters and the approved DQN replay
+extension; best/last are references, not additional model files. Resume occurs at
+official iteration boundaries, not native exact waves or arbitrary simulator state.
+Old native checkpoints cannot continue under RLlib.
 
 ## Configuration and orchestration
 
@@ -49,29 +51,47 @@ Resume validates these identities. Recompiling a current snapshot uses that
 preserved Scenario, not a historical standalone workload authoring branch.
 
 Profiles change operational settings only. Public check/run, foreground/background
-execution, batches, Ray Tune, monitoring and current replay use this same runtime.
-The current research family is Small/Medium × Base/ISL/E1a-current PPO/Rule.
+execution, batches, Ray Tune and monitoring use this runtime.
+The maintained recipes cover Small/Medium Base/SL PPO/DQN.
 Algorithm-neutral machine-breakdown Scenarios define all four fault conditions.
 Each Experiment embeds its fixed test seeds and physical-world hashes; compilation
 freezes generated inventories as runtime artifacts. See ADR0075.
 
 Optional Torch, Gymnasium, Ray, Qt, W&B and TensorBoard imports stay at their
 adapters. Importing the simulator requires none of these frameworks.
-Historical source/readers and experiment definitions live outside the tracked
-tree; existing runs and checkpoints remain untouched. See the archive index for
+Historical source/readers and experiment definitions are retained under
+`archive/`; existing runs and checkpoints remain untouched. See the archive index for
 source recovery. No new formal run or research superiority is established here.
 
-Native batch evaluation uses the phase lease contract in
-[ADR0077](decisions/0077-native-phase-resource-control.md): training keeps a baseline
-CPU, evaluation atomically grows its existing task slot, and in-flight cases drain
-before a reduced CPU lease is released. Requested evaluation concurrency is distinct
-from actual admitted workers and from the aggregate queue budget.
+[ADR0089](decisions/0089-rllib-tune-runtime.md) replaces the native execution
+and [ADR0087](decisions/0087-official-tune-execution.md) stage-resource design.
+Ordinary experiments and searches share one Tune Trainable around official RLlib
+Algorithms. FIFO admits the resident driver, Learner and training/evaluation
+EnvRunners together. Evaluation runs after training with internal parallelism;
+idle components still reserve their declared resources. There is no stage actor
+rebuild, bootstrap, online resizing or custom performance calibration.
 
-[ADR0078](decisions/0078-unified-operational-cli.md) consolidates the operational CLI.
-A configure request validates and applies all resource fields in one journal
-transaction. Task IDs, scientific task types, aggregate budgets and per-panel
-CPU caps have distinct parameters. CLI consolidation does not migrate running
-processes or change frozen scientific inputs.
+Whole-run pause commits an official boundary before Tune shutdown; restore reuses
+the same Tuner and search state. Declarations are logical admission requests, not
+OS process limits. [ADR0098](decisions/0098-rllib-core-closeout.md) limits current
+acceptance to the core training/control/search loop. ADR0100 adds named Rule/Random
+fixed panels as Tune scientific tasks with reserved Ray case workers and the existing
+atomic receipts. Learning standalone evaluation,
+window/recovery analysis and new recordings are
+explicitly deferred; rule smoke, scientific calibration and historical reads stay.
 
-Opt-in [native sampling and update controls](training-sampling.md) extend the same
-training session; see [ADR0082](decisions/0082-native-training-sampling-controls.md).
+For calibrated searches, [ADR0088](decisions/0088-shared-search-calibration.md)
+fixes every candidate to the validated template's drain. Each trial retains the
+complete original report and the original calibration identity content, separately
+from its changed algorithm. Candidate inputs and provenance are published together
+before scientific execution. Ordinary fixed-run calibration matching is unchanged.
+
+Official sampling and update configuration is described in
+[training controls](training-sampling.md); native ADR0082 controls are retired.
+
+PR42 Morris/E1a-current now uses a single-agent RLlib PPO adapter (ADR0101).
+Its semantic centralized tasks, CONWIP, public global features, flat candidate
+scorer and scaled default reward remain. Compact Gym Sequence rows are batched
+through public vector/ConnectorV2 interfaces; the official learner and common Tune
+checkpoint/panel runtime own training and recovery. It is distinct from the
+historical Morris network over Base role decisions.

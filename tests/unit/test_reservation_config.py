@@ -1,4 +1,4 @@
-"""Native four-file periodic_evaluation stays framework-free and does not launch work."""
+"""Public RLlib configuration stays framework-free and does not launch work."""
 
 import json
 import subprocess
@@ -11,7 +11,7 @@ from smartsom.config.reservation import compile_reservation
 from tests.helpers.algorithm import algorithm_document, algorithm_options
 
 ROOT = Path(__file__).resolve().parents[2]
-PATH = ROOT / "experiments/examples/small/default/experiment.yaml"
+PATH = ROOT / "experiments/examples/current-smoke/default/experiment.yaml"
 
 
 def test_safe_yaml_parser_preserves_values_and_strict_mapping_checks(tmp_path):

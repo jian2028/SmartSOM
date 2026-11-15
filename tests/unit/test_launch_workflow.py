@@ -14,7 +14,7 @@ from smartsom.experiments.launch import compare, compile_launch, update_executio
 from smartsom.experiments.reservation import allocate, load
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "experiments/examples/small/default/experiment.yaml"
+SOURCE = ROOT / "experiments/examples/current-smoke/default/experiment.yaml"
 
 
 def test_runtime_package_inventory_is_per_launch_but_git_is_checked_each_time(
@@ -124,9 +124,13 @@ def test_profile_cli_precedence_and_scientific_identity(tmp_path, monkeypatch):
     assert after.scientific_sha256 == before.scientific_sha256
     changed = compile_reservation(
         SOURCE,
-        sets=["algorithm.production.policies.ppo.learner.params.learning_rate=0.002"],
+        sets=["algorithm.production.policies.ppo.learner.params.lr=0.002"],
     )
     assert changed.scientific_sha256 != before.scientific_sha256
+    assert (
+        compile_reservation(SOURCE, learning_rate=0.002).scientific_sha256
+        == changed.scientific_sha256
+    )
 
 
 @pytest.mark.parametrize(
@@ -204,9 +208,7 @@ def test_check_directory_and_file_share_settings(tmp_path, monkeypatch):
     (folder / "a").mkdir()
     path = folder / "a/experiment.yaml"
     path.write_text(yaml.safe_dump(data))
-    overrides = {
-        "operations": {"concurrency": {"max_concurrent": 4, "mode": "adaptive"}}
-    }
+    overrides = {"operations": {"concurrency": {"max_concurrent": 4}}}
     single = compile_reservation(path, **overrides)
     batch = compile_launch(folder, **overrides)
     assert batch.operations == single.operations
@@ -307,6 +309,7 @@ def test_matrix_and_directory_share_one_flat_admission_plan(tmp_path):
         else ("factory", "workload", "algorithm")
     ):
         source[key] = str((SOURCE.parent / source[key]).resolve())
+    source.pop("train_seeds", None)
     source["matrix"] = {
         "experiment.run.seed": [101, 102],
         "algorithm.decision_protocol.pre.accept.allow_stop": [False, True],
@@ -328,15 +331,17 @@ def test_matrix_and_directory_share_one_flat_admission_plan(tmp_path):
         compile_launch(path)
 
 
-def test_single_run_budget_is_admission_not_scientific_override(tmp_path):
-    from smartsom.experiments.launch import check_resource_budget
-
-    plan = compile_reservation(SOURCE, operations={"resources": {"cpus": 0.5}})
-    root = allocate(plan, root=tmp_path / "limited")
-    with pytest.raises(ValueError, match="cannot admit"):
-        check_resource_budget(root)
-    assert not json.loads((root / "resource-admission.json").read_text())["accepted"]
-    assert not (root / "manifest.json").exists()
+def test_impossible_resident_budget_is_rejected_before_output(tmp_path):
+    with pytest.raises(ValueError, match="exceeding total"):
+        compile_reservation(
+            SOURCE,
+            operations={
+                "output_root": str(tmp_path),
+                "resources": {"cpus": 1},
+                "rllib": {"resources": {"num_cpus_for_main_process": 2}},
+            },
+        )
+    assert not list(tmp_path.iterdir())
 
 
 def test_expanded_matrix_id_collision_fails_before_output_allocation(tmp_path, capsys):
@@ -350,6 +355,7 @@ def test_expanded_matrix_id_collision_fails_before_output_allocation(tmp_path, c
     ):
         source[key] = str(SOURCE.parent / source[key])
     source["run"] = {"output": str(tmp_path / "runs/a")}
+    source.pop("train_seeds", None)
     source["matrix"] = {"experiment.run.seed": [101]}
     (folder / "trial").mkdir()
     (folder / "trial/experiment.yaml").write_text(yaml.safe_dump(source))
@@ -367,48 +373,19 @@ def test_expanded_matrix_id_collision_fails_before_output_allocation(tmp_path, c
         assert not (tmp_path / "runs").exists()
 
 
-def test_batch_resume_initializes_and_reapplies_explicit_limits(tmp_path):
-    from smartsom.experiments import runtime_control
-    from smartsom.experiments.author_batch import _runtime_initialize
-    from smartsom.experiments.author_batch import allocate as allocate_batch
-
-    source = yaml.safe_load(SOURCE.read_text())
-    for key in (
-        ("scenario", "algorithm")
-        if "scenario" in source
-        else ("factory", "workload", "algorithm")
-    ):
-        source[key] = str((SOURCE.parent / source[key]).resolve())
-    source.setdefault("run", {})["output"] = str(tmp_path / "runs" / "run")
-    folder = tmp_path / "inputs"
-    folder.mkdir()
-    (folder / "one").mkdir()
-    (folder / "one/experiment.yaml").write_text(yaml.safe_dump(source))
-    root = allocate_batch(compile_launch(folder))
-    update_execution(
-        root,
-        operations={"concurrency": {"max_concurrent": 7}, "resources": {"cpus": 4}},
-    )
-    plan = json.loads((root / "plan.json").read_text())
-    state = json.loads((root / "batch.json").read_text())
-    _runtime_initialize(root, plan, state)
-    assert runtime_control.snapshot(root)["limit"] == 7
-    assert runtime_control.snapshot(root)["budget"]["cpus"] == 4
-    runtime_control.submit(root, "limit", value=3)
-    runtime_control.apply(root)
-    update_execution(root, operations={"concurrency": {"max_concurrent": 7}})
-    assert runtime_control.apply(root)["limit"] == 7
-
-
 def test_historical_batch_control_rejected_without_writes(tmp_path):
-    from smartsom.experiments import runtime_control
 
     (tmp_path / "plan.json").write_text(
         json.dumps({"schema": "smartsom.author-batch-plan/v1", "contract": "v4"})
     )
-    runtime_control.initialize(tmp_path, 2)
+    (tmp_path / "control").mkdir()
+    (tmp_path / "control/runtime.json").write_text(
+        json.dumps({"status": "prepared", "limit": 2})
+    )
     before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
-    assert main(["configure", str(tmp_path), "--max-concurrent", "9"]) == 2
+    with pytest.raises(SystemExit) as error:
+        main(["configure", str(tmp_path), "--max-concurrent", "9"])
+    assert error.value.code == 2
     assert all(p.read_bytes() == data for p, data in before.items())
 
 
@@ -480,7 +457,7 @@ def test_check_output_modes_are_read_only(check_study, monkeypatch, capsys, mode
                 "source_files" not in output
             )  # Named human sections, not JSON payload.
             assert "files:" in output and "origins:" in output
-            assert "smartsom.learning.ppo.create_learner" in output
+            assert "smartsom.learning.rllib_config.ppo_config" in output
             assert "scientific_sha256:" in output
         else:
             assert len(output.splitlines()) <= 26
@@ -539,8 +516,6 @@ def test_check_json_is_completed_and_retired_verbosity_is_rejected():
 
 
 def test_check_smoke_methods_and_tune_seed_summary(check_study):
-    from dataclasses import replace
-
     from smartsom.experiments.check_display import render_check
 
     smoke = compile_reservation(
@@ -550,17 +525,14 @@ def test_check_smoke_methods_and_tune_seed_summary(check_study):
     assert "策略：rule, random" in output
     assert "smoke 100 ticks / 方法" in output
     assert "总计" not in output
-    plan = compile_reservation(check_study / "both-on/experiment.yaml")
-    ex = plan.experiment.model_copy(
-        update={
-            "run": plan.experiment.run.model_copy(update={"tune": "recommend"}),
-            "train_seeds": (101, 102, 103),
-        }
-    )
-    output = render_check(replace(plan, experiment=ex))
-    assert "Tune recommend" in output
+    path = check_study / "both-on/experiment.yaml"
+    authored = yaml.safe_load(path.read_text())
+    authored["train_seeds"] = [101, 102, 103]
+    path.write_text(yaml.safe_dump(authored))
+    output = render_check(compile_launch(path))
+    assert "Tune" in output
     assert "Seed：101, 102, 103" in output
-    assert "总计" not in output
+    assert "总计 480,000 ticks" in output
 
 
 @pytest.mark.parametrize("directory", [False, True])
@@ -641,7 +613,6 @@ def test_removed_options_are_not_silently_abbreviated(arguments):
 def test_resource_names_match_across_launch_resume_and_configure():
     from smartsom.config.launch import resolve_operations
     from smartsom.experiments.cli import _operation_overrides, _parser
-    from smartsom.experiments.phase_resources import EvaluationLease
 
     flags = [
         "--max-concurrent",
@@ -655,45 +626,38 @@ def test_resource_names_match_across_launch_resume_and_configure():
         "--memory-gib",
         "80",
     ]
-    for command in ("check", "run", "resume", "configure"):
+    for command in ("check", "run", "resume"):
         args = _parser().parse_args([command, "unused", *flags])
         settings, _ = resolve_operations({}, cli=_operation_overrides(args))
         assert settings["concurrency"]["evaluation_processes"] == 5
         assert settings["concurrency"]["evaluation_cpus"] == 3
         assert settings["resources"]["cpus"] == 30
-    assert EvaluationLease(5, cpus=3).target(0) == 3
 
 
-def test_status_combines_metadata_task_and_receipt(tmp_path, monkeypatch, capsys):
-    from smartsom.experiments import catalog, cli, runtime_control
+def test_status_reads_historical_metadata_without_applying_requests(
+    tmp_path, monkeypatch, capsys
+):
+    from smartsom.experiments import catalog, cli
 
     monkeypatch.setattr(catalog, "resolve_run", lambda value, roots=None: tmp_path)
-    runtime_control.initialize(tmp_path, 8)
-    runtime_control.publish(
-        tmp_path,
-        active=1,
-        tasks={"a": {"status": "running", "cpus": 3, "evaluation_effective": 3}},
-    )
-    receipt = runtime_control.submit(tmp_path, "configure", value={"max_concurrent": 4})
-    assert (
-        cli.main(
-            [
-                "status",
-                str(tmp_path),
-                "--task-id",
-                "a",
-                "--command-id",
-                receipt["id"],
-                "--json",
-            ]
+    (tmp_path / "control").mkdir()
+    path = tmp_path / "control/runtime.json"
+    path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "limit": 8,
+                "active": 1,
+                "tasks": {"a": {"status": "running", "evaluation_effective": 3}},
+            }
         )
-        == 0
     )
+    before = path.read_bytes()
+    assert cli.main(["status", str(tmp_path), "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
-    assert data["task"]["evaluation_effective"] == 3
-    assert data["command"]["status"] == "received"
+    assert data["runtime"]["tasks"]["a"]["evaluation_effective"] == 3
     assert data["runtime"]["limit"] == 8
-    assert data["directory"] == str(tmp_path)
+    assert path.read_bytes() == before
 
 
 def test_successful_stop_exit_code_is_independent_of_scientific_outcome(

@@ -15,7 +15,7 @@ dependencies = [
 smartsom = "smartsom.experiments.cli:main"
 
 [project.optional-dependencies]
-tuning = ["ray[tune]==2.58.0", "psutil>=7.2,<8", "threadpoolctl>=3.6,<4"]
+tuning = ["ray[rllib,tune]==2.60.0", "optuna>=4,<5", "psutil>=7.2,<8", "threadpoolctl>=3.6,<4"]
 studio = ["PySide6==6.11.2"]
 learning = ["torch==2.14.0", "numpy>=2,<3"]
 tensorboard = ["tensorboard>=2.20,<3"]

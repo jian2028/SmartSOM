@@ -1,0 +1,29 @@
+schema: smartsom.base-experiment/v1
+scenario: ../../../../configs/scenarios/current/medium.yaml
+evaluation:
+  mode: limited
+periodic_evaluation_cases: 200
+test_cases: 200
+case_sets:
+  periodic_evaluation: ../../../../configs/evaluation/current/medium/periodic_evaluation.json
+  test: ../../../../configs/evaluation/current/medium/test.json
+drain_ticks: 10590
+drain_frozen: true
+concurrency:
+  max_concurrent: 5
+  evaluation_processes: 20
+  evaluation_cpus: 20
+algorithm: ../../../../configs/algorithms/current/random.yaml
+run:
+  task: evaluate
+  methods:
+  - random
+  split: test
+  selection: sample
+  seconds: null
+  max_failures: 0
+tracking:
+  mode: online
+  project: SmartSOM
+  group: rllib-j1-medium
+  variant: random

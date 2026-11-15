@@ -489,13 +489,10 @@ def runtime_shortcuts(width, *, editing=False, queue=False, controlling=False):
     actions = (
         [("Enter", "确认"), ("Esc/Ctrl+C", "取消")]
         if editing
-        else [("↑↓", "选择"), ("Enter", "加入/取消"), ("←→", "排序"), ("Esc", "返回")]
-        if queue and controlling
         else [
             ("↑↓", "选择"),
             ("Enter", "详情"),
             *([("q", "退出")] if controlling else []),
-            *([("Q", "优先")] if controlling and width >= 72 else []),
             *([("/", "搜索"), ("f", "视图")] if width >= 52 else []),
             ("?", "帮助"),
         ]

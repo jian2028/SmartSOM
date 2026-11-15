@@ -1,0 +1,101 @@
+schema: smartsom.base-experiment/v1
+scenario: ../../../../configs/scenarios/v3/small.yaml
+algorithm: ../../../../configs/algorithms/v3/small/isl-concat-ddqn.yaml
+train_seeds:
+- 101
+- 102
+- 103
+- 104
+- 105
+train_episodes: 1000
+budget_boundary: complete_episode
+checkpoint_every_episodes: 50
+checkpoint_retention: best_last
+training_conditions:
+- normal
+- low
+- medium
+- high
+condition_sampling: balanced_cycle
+final_evaluation: true
+evaluation:
+  mode: limited
+  checkpoints:
+  - episode: 1000
+    modes:
+    - argmax
+  case_seconds: {}
+run:
+  task: train
+  seconds: null
+  methods:
+  - configured
+  selection: argmax
+  split: test
+  action_seeds: 1
+  tune: 'off'
+  max_failures: 0
+batch:
+  stage: 1
+  parallel_files: 3
+concurrency:
+  mode: manual
+  max_concurrent: 3
+  evaluation_processes: 20
+  evaluation_cpus: 20
+tracking:
+  mode: online
+  project: SmartSOM
+  group: v3-small
+  variant: isl-concat-shared
+resources:
+  guard:
+    max_worker_rss_gib: 16
+    min_host_available_gib: 8
+    min_disk_free_gib: 2
+  cpus: 12
+  memory_gib: 32
+drain_ticks: 10778
+drain_frozen: true
+train_ticks: 100000
+training_world_domain: social-long-v1/world
+training_world_prefix:
+- train
+training_seed_modulus: null
+test:
+  seeds: 50
+sampling:
+  num_envs: 2
+  processes: 2
+  fragment_ticks: 256
+episode_end: drain_deadline
+validation:
+  unit: episodes
+  milestones:
+  - 50
+  - 100
+  - 150
+  - 200
+  - 250
+  - 300
+  - 350
+  - 400
+  - 450
+  - 500
+  - 550
+  - 600
+  - 650
+  - 700
+  - 750
+  - 800
+  - 850
+  - 900
+  - 950
+  - 1000
+  modes:
+  - argmax
+  sample_action_seeds: 1
+  selection: argmax_delivery_cost
+  select_initial: false
+  seeds: 50
+  cost_metric: learning_cost

@@ -11,6 +11,7 @@ METRICS = (
     "drained",
     "joint_cost",
     "qualified_coverage",
+    "makespan",
     "mean_tardiness",
     "final_passing_rate",
     "tardiness_p95",

@@ -1,0 +1,16 @@
+# Resource declarations, not measured allocations or OS isolation.
+resources:
+  cpus: 12
+rllib:
+  resources:
+    num_cpus_for_main_process: 1
+  learners:
+    num_learners: 0
+  env_runners:
+    num_env_runners: 2
+    num_cpus_per_env_runner: 1
+  evaluation_num_env_runners: 4
+concurrency:
+  max_concurrent: 3
+tracking:
+  mode: offline

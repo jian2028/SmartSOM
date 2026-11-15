@@ -103,7 +103,7 @@ def evaluate_periodically(session):
                 deadline_unix=None
                 if session.deadline == float("inf")
                 else session.deadline,
-                numerical_threads=torch.get_num_threads(),
+                numerical_threads=getattr(session.args, "numerical_threads", 1),
                 training_progress={
                     "train_seed": session.args.seed,
                     "episodes": len(session.rows),

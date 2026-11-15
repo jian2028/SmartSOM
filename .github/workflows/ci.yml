@@ -464,7 +464,7 @@ jobs:
           retention-days: 7
 
   macos-learning:
-    name: macOS native checkpoint and process acceptance
+    name: macOS RLlib training and checkpoint acceptance
     env:
       SMARTSOM_ADMISSION_DIAGNOSTICS: "1"
     needs: plan

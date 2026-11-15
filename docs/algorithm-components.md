@@ -328,6 +328,12 @@ mechanism and not an exact reproduction of the original paper.
 [`configs/algorithms/justin.yaml`](../configs/algorithms/justin.yaml) selects the
 Justin heuristic component. Default Rule, Justin and custom rule functions read
 named public facts. Random samples legal candidates with its restorable RNG.
+Default Base Rule selects the earliest-due job and then a speed using the critical
+ratio of time to due date over remaining normal processing work: below 1 fast,
+from 1 to below 1.2 normal, and at least 1.2 slow. The current machine's work is
+counted once; later operations use minimum normal work on compatible machines.
+See [ADR0099](decisions/0099-single-critical-ratio-rule.md) for estimation limits
+and legal-mode fallback. The maintained campaign has one Rule, not three speeds.
 There is one current research experiment family; to change methods, create a new
 Experiment definition using the same Scenario/test panel and select its Algorithm.
 Historical comparator experiment directories are not maintained.

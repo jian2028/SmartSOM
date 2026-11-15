@@ -13,7 +13,7 @@ from smartsom.controllers.e1a import network as e1a
 from smartsom.engine.central_control import ADVANCE
 from smartsom.experiments.reservation_runtime import episode
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[2] / "archive/legacy_runtime"
 
 
 def configuration(**network):

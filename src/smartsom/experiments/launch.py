@@ -9,7 +9,13 @@ from smartsom.config.reservation import compile_reservation
 from smartsom.experiments.evidence import write_json
 
 
-def compile_launch(
+def compile_launch(value, **overrides):
+    from smartsom.config.rllib_compatibility import validate_plan
+
+    return validate_plan(_compile_launch(value, **overrides))
+
+
+def _compile_launch(
     value,
     *,
     ids=None,
@@ -17,22 +23,22 @@ def compile_launch(
     selectors=None,
     first_train_seeds=None,
     resume_missing=False,
+    search=None,
     **overrides,
 ):
     path = resolve_experiment(value)
+    if search is not None:
+        from smartsom.experiments.tune_hpo import compile_search
+
+        entry = path / "experiment.yaml" if path.is_dir() else path
+        if ids or tags or selectors or first_train_seeds is not None or resume_missing:
+            raise ValueError("search uses one explicit experiment and training seed")
+        return compile_search(entry, search, **overrides)
     incremental = (
         first_train_seeds is not None or resume_missing or selectors is not None
     )
     if incremental and not path.is_dir():
         raise ValueError("execution seed selection requires an Experiment directory")
-    entry = path / "experiment.yaml" if path.is_dir() else path
-    if entry.is_file() and (
-        overrides.get("tuning") not in (None, "off")
-        or read_document(entry).get("run", {}).get("tune", "off") != "off"
-    ):
-        if incremental:
-            raise ValueError("incremental batches require native directory execution")
-        return compile_reservation(entry, **overrides)
     from smartsom.config.experiment_layout import location
 
     if path.is_file() and location(path) is not None:
@@ -40,7 +46,7 @@ def compile_launch(
 
         if ids or tags:
             raise ValueError("--id/--tag require an Experiment directory")
-        return compile_files(path.parent, [path], {}, **overrides)
+        return compile_files(path.parent, [path], **overrides)
     if path.is_dir():
         from smartsom.experiments.author_batch import compile_directory
 
@@ -58,13 +64,30 @@ def compile_launch(
     if "matrix" in read_document(path):
         from smartsom.experiments.reservation_batch import compile_files
 
-        return compile_files(path, [path], {}, **overrides)
-    return compile_reservation(path, **overrides)
+        return compile_files(path, [path], **overrides)
+    compiled = compile_reservation(path, **overrides)
+    if (
+        compiled.experiment.run.task == "train"
+        and len(compiled.experiment.train_seeds) > 1
+    ):
+        from smartsom.experiments.reservation_batch import compile_files
+
+        return compile_files(path, [path], **overrides)
+    if (
+        compiled.experiment.run.task == "train"
+        and compiled.experiment.run.seed != compiled.experiment.train_seeds[0]
+    ):
+        return compile_reservation(
+            path, **{**overrides, "seed": compiled.experiment.train_seeds[0]}
+        )
+    return compiled
 
 
 def run_launch(plan, *, keep_open=False, interactive=False):
+    from smartsom.config.rllib_compatibility import validate_plan
     from smartsom.experiments.author_batch import DirectoryPlan
 
+    validate_plan(plan)
     if isinstance(plan, DirectoryPlan) and plan.incremental:
         from smartsom.experiments.incremental_batch import submission
 
@@ -76,11 +99,18 @@ def run_launch(plan, *, keep_open=False, interactive=False):
 
 
 def _run_launch(plan, *, keep_open=False, interactive=False):
+    if keep_open:
+        raise ValueError("--keep-open was removed; Tune runs a frozen trial manifest")
     from importlib.util import find_spec
 
     from smartsom.experiments.author_batch import DirectoryPlan
+    from smartsom.experiments.tune_hpo import SearchPlan
     from smartsom.telemetry.runtime import display_options
 
+    if isinstance(plan, SearchPlan):
+        from smartsom.experiments.tune_hpo import run
+
+        return run(plan)
     members = (
         [row["compiled"] for row in plan.files]
         if isinstance(plan, DirectoryPlan)
@@ -109,21 +139,9 @@ def _run_launch(plan, *, keep_open=False, interactive=False):
             from smartsom.telemetry.runtime import OVERRIDES
 
             if isinstance(plan, DirectoryPlan):
-                from smartsom.experiments.author_batch import (
-                    _runtime_initialize,
-                    allocate,
-                    load,
-                )
+                from smartsom.experiments.author_batch import allocate
 
                 root = allocate(plan)
-                _, saved, state = load(root)
-                _runtime_initialize(
-                    root,
-                    saved,
-                    state,
-                    limit=plan.operations["concurrency"]["max_concurrent"],
-                    keep_open=keep_open,
-                )
             else:
                 from smartsom.experiments.reservation import allocate
 
@@ -137,7 +155,6 @@ def _run_launch(plan, *, keep_open=False, interactive=False):
             return run(
                 plan,
                 background=plan.operations["launch"]["mode"] == "background",
-                runtime_limit=plan.operations["concurrency"]["max_concurrent"],
                 keep_open=keep_open,
             )
         from smartsom.experiments.reservation import run
@@ -151,7 +168,6 @@ def update_execution(root, *, profile=None, operations=None):
     """Validate every effective child config before recording operation overrides."""
     from smartsom.config.base_diagnostic import load_inputs
     from smartsom.config.launch import resolve_operations
-    from smartsom.experiments import runtime_control
     from smartsom.experiments.catalog import read_json, require_current
     from smartsom.experiments.control import ACTIVE, alive, processes, read
 
@@ -169,12 +185,18 @@ def update_execution(root, *, profile=None, operations=None):
             and alive(owner["owner"], processes())
         ):
             raise ValueError(
-                "change live concurrency through batch controls; tracking/profile changes require a stopped driver"
+                "execution settings cannot change while the Tune driver is active"
             )
         previous = read_json(directory / "execution.json")
         settings, origins = resolve_operations(
-            previous.get("settings", {}), profile=profile, cli=operations
+            {}, base=previous.get("settings", {}), profile=profile, cli=operations
         )
+        if any((directory / "ray").glob("**/tuner.pkl")):
+            for key in ("resources", "trial_resources", "concurrency"):
+                if settings[key] != previous["settings"].get(key):
+                    raise ValueError(
+                        f"Tune restore retains frozen {key}; choose these settings before a new run"
+                    )
         if settings.get("output_root") != previous.get("settings", {}).get(
             "output_root"
         ):
@@ -199,10 +221,6 @@ def update_execution(root, *, profile=None, operations=None):
             if isinstance(plan.get("files"), list)
             else set()
         )
-        children.update(
-            Path(row["root"])
-            for row in runtime_control.snapshot(directory).get("additions", {}).values()
-        )
         for child in sorted(children):
             prepare(child)
 
@@ -218,50 +236,6 @@ def update_execution(root, *, profile=None, operations=None):
                 directory / "execution.json",
                 {"settings": settings, "origins": origins, "history": history},
             )
-        state = runtime_control.snapshot(directory)
-        if state:
-            if state.get("phase_resources") and (
-                settings["concurrency"]["evaluation_processes"]
-                != previous.get("settings", {})
-                .get("concurrency", {})
-                .get("evaluation_processes")
-                or any(
-                    k in (operations or {}).get("concurrency", {})
-                    for k in ("evaluation_processes", "evaluation_cpus")
-                )
-                or settings["concurrency"].get("evaluation_cpus")
-                != previous.get("settings", {})
-                .get("concurrency", {})
-                .get("evaluation_cpus")
-            ):
-                count = settings["concurrency"]["evaluation_processes"]
-                runtime_control.submit(
-                    directory,
-                    "evaluation",
-                    value={
-                        "processes": count,
-                        "cpus": settings["concurrency"].get("evaluation_cpus") or count,
-                        "reset": True,
-                    },
-                )
-            runtime_control.submit(
-                directory, "limit", value=settings["concurrency"]["max_concurrent"]
-            )
-            runtime_control.submit(
-                directory, "mode", value=settings["concurrency"]["mode"]
-            )
-            budget = {
-                k: v
-                for k, v in {
-                    "cpus": settings["resources"]["cpus"],
-                    "memory": int(settings["resources"]["memory_gib"] * 1024**3)
-                    if settings["resources"]["memory_gib"]
-                    else None,
-                }.items()
-                if v is not None
-            }
-            if budget:
-                runtime_control.submit(directory, "budget", value=budget)
 
 
 def compare(left, right, *, roots=None):
@@ -337,59 +311,3 @@ def compare(left, right, *, roots=None):
         for key in sorted(a.keys() | b.keys())
         if a.get(key) != b.get(key) or (key in a) != (key in b)
     ]
-
-
-def check_resource_budget(root, *, prepared=None):
-    """Apply explicit single-run admission budgets without changing scientific work.
-
-    This is a logical admission check, not OS process isolation. Directory/Tune
-    schedulers additionally reserve aggregate resources and observe active workers.
-    """
-    import psutil
-
-    from smartsom.config.base_diagnostic import load_inputs
-
-    if prepared is None:
-        ex, *_ = load_inputs(Path(root) / "inputs/experiment.yaml")
-    else:
-        from smartsom.experiments.reservation_runtime import prepared_identity
-
-        inputs, expected = prepared
-        if prepared_identity(inputs[-1]) != expected:
-            raise ValueError("prepared input identity changed before admission")
-        ex = inputs[0]
-    budget = ex.resources
-    if budget.cpus is None and budget.memory_gib is None:
-        return
-    from smartsom.experiments.phase_resources import BATCH
-
-    workers = (
-        1
-        if BATCH.get()
-        else min(
-            ex.concurrency.evaluation_processes,
-            ex.concurrency.evaluation_cpus or ex.concurrency.evaluation_processes,
-        )
-    )
-    required_memory = max(256 * 1024**2, psutil.Process().memory_info().rss) * (
-        workers + 1 if workers > 1 else 1
-    )
-    accepted = (budget.cpus is None or budget.cpus >= workers) and (
-        budget.memory_gib is None
-        or budget.memory_gib * 1024**3 >= required_memory * 1.25
-    )
-    write_json(
-        Path(root) / "resource-admission.json",
-        {
-            "accepted": accepted,
-            "requested_cpus": workers,
-            "observed_or_floor_memory": required_memory,
-            "memory_peak_factor": 1.25,
-            "budget": budget.model_dump(),
-            "scope": "single native experiment",
-        },
-    )
-    if not accepted:
-        raise ValueError(
-            "resource budget cannot admit this experiment; increase CPU/memory budget without changing scientific inputs"
-        )

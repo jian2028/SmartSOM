@@ -1,5 +1,17 @@
 # Current experiment workflow
 
+This worktree is migrating to official Tune; full engineering and performance
+acceptance is pending. See [migration status](tune-migration.md). Archived running
+experiments continue to use their original source and command contract.
+
+The single maintained research matrix is now [experiments/current](../experiments/current/README.md),
+with V3 Small/Medium scenarios (300/750 orders), official PPO/DQN defaults and the
+new J objective. Use its `rllib-local`/`rllib-server` profiles, currently offline for
+tracking. The older compact 128/320-order examples described below are engineering
+fixtures, not a second maintained research campaign. Historical campaigns are in
+[archive](../archive/README.md); their native execution examples do not establish
+support through the new RLlib entry point.
+
 SmartSOM uses Scenario, Algorithm and Experiment as human-authored inputs.
 Scenario combines factory geometry, shared machine/AGV/Buffer defaults, job rules
 and breakdowns. Studio edits and saves that same scene. The compiler expands it
@@ -13,10 +25,10 @@ schema, mixed role bindings, independent Mover and action ablations. Current def
 ## Install and inspect
 
 Use Python 3.12 and the committed uv lockfile. Optional packages stay outside core
-imports. For native learning and both monitoring sinks:
+imports. For official RLlib learning and both monitoring sinks:
 
 ```sh
-uv sync --locked --extra learning --extra cpu --extra wandb --extra tensorboard
+uv sync --locked --extra learning --extra cpu --extra tuning --extra wandb --extra tensorboard
 uv run --no-sync smartsom check current-smoke --profile local
 ```
 
@@ -73,7 +85,7 @@ The former target file matched the BudgetVM batch
 `4fbc910f666abf34534be36d9f6e1d5937c56d6d9eac70697cae5ceec5ce9ab7`.
 These hashes identify the historical files, not the compact maps.
 
-Add `--extra tuning` for Ray Tune and `--extra studio` for the desktop editor and
+Execution requires `--extra tuning`; add `--extra studio` for the desktop editor and
 recorded playback. `check` never opens W&B or allocates an experiment directory.
 By default it shows a compact human-readable summary: task count, shared settings,
 method differences, seeds, budgets, monitoring and output location. Large batches
@@ -98,18 +110,17 @@ The Python check API is unchanged. Run/resume display options are unchanged.
 ```sh
 uv run --no-sync smartsom run current-smoke
 uv run --no-sync smartsom run current-train --profile server --background
-uv run --no-sync smartsom run path/to/experiment-directory --max-concurrent 4 --concurrency-mode adaptive
+uv run --no-sync smartsom run path/to/experiment-directory --max-concurrent 4
 uv run --no-sync smartsom run current-train --wandb offline --tensorboard
 ```
 
 These are alternatives, not commands to run repeatedly into the same output path.
-Training and evaluation require a completed calibration record. The bounded
+Training requires a completed calibration record or an explicitly frozen drain. The bounded
 engineering examples form this explicit sequence:
 
 ```sh
 uv run --no-sync smartsom run current-calibrate
 uv run --no-sync smartsom run current-train
-uv run --no-sync smartsom run current-evaluate
 ```
 
 The example budgets are engineering checks, not research recommendations. Change
@@ -120,7 +131,7 @@ An existing path wins over a short name. Short names search `experiments/` by
 file stem or directory name; ambiguity fails with candidate paths. Directory runs
 read direct Experiment YAML members and preserve their declared stage order.
 A directory containing
-calibration/train/evaluate templates does not automatically resolve dependencies;
+calibration/train templates does not automatically resolve dependencies;
 use a deliberately authored batch with available calibration inputs.
 
 Profiles live in `configs/profiles/` or an explicit path. They are optional and do
@@ -131,7 +142,6 @@ explicit profile, explicit CLI. For example:
 launch:
   mode: foreground
 concurrency:
-  mode: adaptive
   max_concurrent: 4
 resources:
   cpus: 8
@@ -144,117 +154,42 @@ tracking:
 
 Both supplied profiles default to foreground. `--foreground` and `--background`
 are mutually exclusive. Profiles cannot change seed, learning rate, observation,
-reward, train/validation budgets, sampling process count or device. Advanced
-`--set algorithm.production.policies.ppo.learner.params.learning_rate=...` remains available for a new experiment and
+reward or train/validation budgets. Profiles own RLlib component resources and worker counts. Advanced
+`--set algorithm.production.policies.ppo.learner.params.lr=...` remains available for a new experiment and
 is recorded explicitly. Resume uses frozen scientific inputs, never edited author
 YAML. Concurrency limits independent trials; it does not change rollout size or
 learning updates. Resource budgets are admission ceilings, not OS hard quotas.
 
-For native train/evaluate/calibrate with `tune: off`, an optional
-`resources.guard` adds cooperative worker protection independently of those
-budgets. It requires all three fields: `max_worker_rss_gib`,
-`min_host_available_gib`, and `min_disk_free_gib`; null (the default) disables it.
-The rule-DQN recipe uses 8/8/2 GiB. Rollouts sample at most once per second;
-model/update/checkpoint/receipt boundaries force checks. A breach records
-`resource-guard-failure.json`, preserves committed results and requires explicit
-recovery. It cannot enforce a hard peak during a single allocation or save.
-See [ADR0069](decisions/0069-cooperative-worker-resource-guard.md).
+Declare resident driver, Learner and EnvRunner resources under profile `rllib`;
+see [training configuration](training-sampling.md). Requests include training and
+evaluation workers even while idle. There is no phase resource switch, performance
+calibration, RSS/host-memory/disk guard or online adjustment. Optional logical
+memory requests affect admission only; omission does not imply memory isolation.
+Scientific `run.calibration` and fixed Rule-based truncation limits remain.
 
-Native PPO/DQN use Torch eval mode for rollout, bootstrap, optimizer forwards and
-evaluation. Optimizer forwards still enable gradients and update trainable weights.
-This keeps PPO's recorded and recomputed probabilities on the same distribution
-and prevents DQN target inference from changing state. Dropout is disabled and
-BatchNorm running statistics stay fixed; DQN target refresh copies the complete
-state, including buffers. Custom networks must support singleton requests and
-deterministic, batch-independent eval forwards. BatchNorm without running
-statistics (`track_running_stats=False`) does not meet that contract. Action
-sampling and DQN epsilon exploration remain explicit seeded policy operations.
+Official RLlib owns collection, updates, replay and exploration. Research RLModules
+provide observations, masks and social representations. Retired native learner
+parameters and exact-wave recovery are not compatibility options. Standalone
+`current-evaluate`, window/recovery analysis and new
+recordings are deferred; check/run explicitly reject them before allocation.
 
-## Find, control and compare
+`pause` stops the whole run at complete checkpoint boundaries; `resume` uses
+`Tuner.restore` for unfinished trials. Use `retry RUN_ID --all` to include failed
+trials; completed results remain completed. Automatic failure retries default to
+zero. Frozen checkpoint loss or corruption is an error, never a fresh restart.
+`status RUN_ID --json` exposes run state and Tune observations. `monitor` is
+read-only; `attach` retains navigation and whole-run exit controls.
 
-```sh
-smartsom runs
-smartsom status RUN_ID
-smartsom status RUN_ID
-smartsom attach RUN_ID
-smartsom pause RUN_ID
-smartsom resume RUN_ID
-smartsom stop RUN_ID
-smartsom clean RUN_ID --show-target
-smartsom clean RUN_ID --confirm-target TOKEN_FROM_PREVIEW
-smartsom results runs --algorithm ppo --seed 101 --status completed
-smartsom config diff current-train RUN_ID
-```
+### Launch resource configuration
 
-Commands accept a run directory or unique ID prefix. Supply `--root PATH` for
-custom output roots; multiple roots can be provided. No mutation selects an
-implicit `latest`. Historical runs are discoverable and readable; control or
-continuation requires archived source. Pause requests and completed safe-boundary
-pauses are separate states. A live scheduler resume releases its pause; a stopped
-driver resume verifies frozen source/environment/inputs and committed state.
-Weights alone are not full continuation state.
-
-Interactive foreground CLI runs and `attach` share the same terminal controls.
-Press `q` or `Ctrl+C` to open the exit menu: `1` / Enter safely stops and retains
-all local results (the default); `2` safely stops then deletes all local results;
-Esc or Ctrl+C cancels the menu. The target directory and deletion scope are shown
-before choosing. Deletion uses the same ownership checks as the run cleanup backend,
-waits up to 120 seconds without force, and preserves files on timeout. `d` only
-detaches the interface; execution continues and can be reattached by run ID.
-Normal completion does not delete results or prompt for deletion. Without an
-interactive input/output terminal, commands retain their existing noninteractive
-execution behavior. W&B startup failures in the foreground are relayed to the
-terminal: only an explicit `y` authorizes offline continuation. Detaching or
-terminal loss does not imply that consent.
-
-`clean RUN_ID --show-target` previews whole-run deletion; use the returned
-`--confirm-target` only after stopping and verifying process exit. `clean` refuses
-a live run and never stops it implicitly. It permanently removes the local result
-directory, including checkpoints, frozen copies, reports and offline tracking;
-original authoring inputs and W&B cloud runs remain. To clean one removed task,
-use `clean RUN_ID --task-id ID --show-target` and its target-bound confirmation.
-`remove` only removes a task from scheduling and retains files.
-
-`resume` releases a pause or restarts a stopped matching driver. It never opts into
-failed-task retry. Use `retry RUN_ID --all` for a batch, or `retry RUN_ID` for a
-failed single run. A live batch supports `retry RUN_ID --task-id ID`; its checkpoint
-and ownership are revalidated by the coordinator. Paused tasks use `resume`, not
-`retry`. Exact task retry after a driver exits is rejected: whole-batch recovery
-uses `retry --all`. Completed work is retained. Add `--preview` to inspect without
-submitting. Task pause/stop holds remain authoritative.
-
-`status` combines run metadata, operational settings and the runtime journal.
-Use `--task-id ID` for a task, `--command-id ID` for a control receipt, and `--json`
-for complete machine-readable output. `runs` lists discoverable runs. `monitor`
-is read-only; `attach` enables interactive controls.
-
-A successful whole-run `stop` returns exit code 0 when owned processes have exited,
-even if their final scientific status was failed or stopped. Timeout or rejected
-controls return nonzero. Other control commands return 0 when their request is
-accepted; `received` and `applied` do not certify that workers finished draining.
-
-### Atomic runtime configuration
-
-```sh
-smartsom configure RUN_ID --max-concurrent 8 --concurrency-mode manual \
-  --evaluation-processes 5 --evaluation-cpus 5 --cpus 30 --memory-gib 80
-smartsom configure RUN_ID --task-id EXACT_TASK_ID --evaluation-processes 2 --evaluation-cpus 2
-```
-
-All supplied fields form one journal command/revision and validate before any are
-changed. Missing fields preserve prior values. `--cpus`/`--memory-gib` constrain the
-whole queue, while `--evaluation-cpus` constrains all evaluation workers within one
-experiment. Eight experiments at five workers can request forty CPUs, but an
-aggregate thirty-CPU budget limits actual parallelism. The cap is cooperative
-admission, not OS isolation. Explicit task evaluation fields override queue defaults;
-other evaluation fields inherit those defaults. Task scope rejects queue budgets
-and experiment concurrency settings.
-
-`run`, `check`, and stopped-driver `resume` use the same resource option names.
-Profiles store `concurrency.evaluation_cpus`; null means no extra cap beyond the
-process target. Live `configure` requires a supporting batch driver; single-run
-settings change through stopped-driver `resume`. Old source identities are not
-upgraded in place.
+Total logical `resources` and resident component requests belong in a profile.
+`concurrency.max_concurrent` is an optional Tune cap; null adds no cap.
+`evaluation_processes/evaluation_cpus` are launch settings; explicit
+`rllib.evaluation_num_env_runners/evaluation_config` select official runner
+resources. Training and evaluation run sequentially with resident components.
+`configure`, task-specific controls and priority actions are removed. Changed
+resource declarations require a new run; restore preserves frozen settings.
+Tracking/display-only continuation remains separate.
 
 ## Monitor and sync
 
@@ -314,11 +249,9 @@ axes are rejected. Explicit CLI science overrides apply after matrix values;
 if they collapse distinct entries into duplicate scientific identities, compilation
 rejects the batch. The matrix does not create a second nested worker pool.
 
-Resource budgets are logical admission limits, not OS enforcement. Standalone
-native runs check one CPU and observed/floor memory before execution; directory
-and Tune schedulers additionally account for active workers and host headroom.
-Tune performance calibration is explicit; adaptive runtime control preserves the
-selected numerical-thread layout and changes independent experiment concurrency.
+Resource budgets are logical admission limits, not OS enforcement. Tune admits
+trials from their resident requests and optional concurrency cap. There is no
+custom host-headroom controller, resource calibration or adaptive concurrency.
 
 ## Tracking labels and research views
 
@@ -388,49 +321,20 @@ maps, algorithms, case panels, full scientific configuration or directory bindin
 Choose a new output root for a changed study. Existing batches created without a
 full incremental inventory cannot be converted in place.
 
-A live driver rejects a competing submission. Manual task holds survive resumption.
-Failed tasks are not automatically retried: inspect the error and use explicit
-`retry --all` for the same frozen batch when a complete continuation
-exists. Training-complete tasks with pending final evaluation continue through
-the native runtime. Earlier stages must complete before a selected later stage.
+A live driver rejects competing submissions. `--resume-missing` checks the exact
+frozen manifest and starts only previously unstarted selected tasks after the
+prior driver exits. It cannot add new scientific members, retry failed trials, or
+resume a partially evaluated trained trial. Use whole-run restore/retry for
+started work. Scientific stages remain dependencies; Tune determines execution
+order and rolling replenishment within each stage.
 
+`concurrency.evaluation_processes` defaults to one and is separate from the number
+of concurrent trials. More workers require their resources plus the coordinating
+actor. Case publication stays in frozen order even when later cases finish first;
+committed receipts prevent duplicate results on recovery. Online queue additions
+and resource adjustments are removed.
 
-Append one named file or selected directory entries to an open queue:
-
-```sh
-uv run smartsom add RUN_ID experiments/other-batch/medium-base.yaml --first-train-seeds 1
-uv run smartsom add RUN_ID experiments/other-batch --id medium-base
-```
-
-Both forms identify the same owning batch and seed directories. The second adds
-only its missing seeds. Results remain in the owning batch's `trials/ENTRY/seed-N`
-paths, not `QUEUE/added`. Cross-batch execution uses the queue's admission ceiling;
-its ownership claim blocks a competing original-batch driver until the selected
-work drains. Completion is reflected in the original batch, so a later
-`run --resume-missing` does not run those tasks again. Only independent
-stage-0 tasks may be appended. Closed queues require explicit resumption.
-
-For a batch previously placed at an arbitrary CLI output root, provide that root
-on its first submission to another queue, for example
-`add RUN_ID path/to/batch/medium-base.yaml --output-root runs/custom-batch`.
-The queue then remembers this batch's frozen owner root, so subsequent file,
-directory or parent-directory additions reuse it. Multiple known destinations
-require an explicit choice. There is no global search for unknown historical
-CLI destinations: keep the same explicit root/profile when selecting an existing
-study. `--output-root` with `add` selects one owning batch, not a parent
-folder containing several independent batches.
-
-For native evaluation panels, `--evaluation-processes 4` runs up to four frozen
-cases concurrently; the equivalent Experiment/profile setting is:
-
-```yaml
-concurrency:
-  evaluation_processes: 4
-```
-
-The default is `1`. This is separate from `max_concurrent`, which limits whole
-trials. Native batch training retains a baseline CPU; validation/final evaluation
-requests additional phase resources only while needed. Use an
-adequate `resources.cpus`/`resources.memory_gib` budget. The current process mode
-supports built-in components with `tune: off` and recovery disabled. Results and
-tracking remain ordered; existing case receipts are reused when resuming.
+PR42 Morris/E1a-current uses `experiments/current/{small,medium}/morris-ppo/experiment.yaml`
+through the same check/run and whole-run control commands. It preserves PR42's
+scaled overdue/quality reward and centralized actions, while PPO updates and
+checkpoints use RLlib. See ADR0101; old native Morris checkpoints cannot resume.

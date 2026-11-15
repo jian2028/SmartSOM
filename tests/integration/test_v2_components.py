@@ -12,7 +12,7 @@ from smartsom.config.base_diagnostic import BaseAlgorithm, load_inputs
 from smartsom.experiments.reservation_runtime import episode
 from smartsom.representations.v2.network import Attention
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[2] / "archive/legacy_runtime"
 
 
 @pytest.mark.parametrize("arm", ["base", "isl"])

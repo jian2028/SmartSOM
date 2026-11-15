@@ -5,8 +5,9 @@ updates networks. A wave is committed after all assigned episodes finish; an
 interrupted wave replays from its last durable boundary, as in serial training.
 """
 
-import multiprocessing
 import pickle
+import queue
+import threading
 import time
 import traceback
 
@@ -98,60 +99,106 @@ def _worker(connection, options, seed, index):
         connection.close()
 
 
+class _WorkerConnection:
+    def __init__(self):
+        self.incoming = queue.Queue(maxsize=1)
+        self.outgoing = queue.Queue()
+
+    def recv_bytes(self):
+        return self.incoming.get()
+
+    def send_bytes(self, value):
+        self.outgoing.put(value)
+
+    def close(self):
+        self.outgoing.put(None)
+
+
+class _SamplerActor:
+    def __init__(self, options, seed, index):
+        self.connection = _WorkerConnection()
+        self.thread = threading.Thread(
+            target=_worker, args=(self.connection, options, seed, index), daemon=True
+        )
+        self.thread.start()
+
+    def send(self, value):
+        self.connection.incoming.put(value)
+
+    def receive(self):
+        try:
+            return self.connection.outgoing.get(timeout=0.1)
+        except queue.Empty:
+            return b""
+
+
+class _RayConnection:
+    def __init__(self, actor):
+        self.actor = actor
+
+    def send_bytes(self, value):
+        import ray
+
+        ray.get(self.actor.send.remote(value))
+
+
 class Samplers:
     def __init__(self, options, seed, count):
+        import ray
+        from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+
+        group = ray.util.get_current_placement_group()
+        if group is None:
+            raise RuntimeError(
+                "sampling workers require the Tune trial placement group"
+            )
+        worker = ray.remote(num_cpus=1, max_restarts=0)(_SamplerActor).options(
+            scheduling_strategy=PlacementGroupSchedulingStrategy(placement_group=group)
+        )
         self.workers = []
-        context = multiprocessing.get_context("spawn")
         try:
             for index in range(count):
-                parent, child = context.Pipe()
-                worker = context.Process(
-                    target=_worker, args=(child, options, seed, index)
-                )
-                worker.start()
-                child.close()
-                self.workers.append((parent, worker))
+                actor = worker.remote(options, seed, index)
+                self.workers.append((_RayConnection(actor), actor))
         except BaseException:
             self.close()
             raise
 
     def close(self):
-        for connection, worker in self.workers:
-            # Shutdown also covers a worker blocked at a fragment handshake.
-            if worker.is_alive():
-                worker.terminate()
-            worker.join(timeout=5)
-            if worker.is_alive():
-                worker.kill()
-                worker.join()
-            connection.close()
+        import ray
+
+        for _, actor in self.workers:
+            ray.kill(actor, no_restart=True)
         self.workers.clear()
 
     def receive(self, index, session):
+        import ray
+
         from smartsom.experiments.control import boundary
 
-        connection, process = self.workers[index]
+        _, actor = self.workers[index]
         while True:
-            boundary()
+            boundary(session.root)
             if time.time() >= session.deadline:
                 raise TimeoutError("training sampling deadline reached")
-            if connection.poll(0.1):
-                kind, value = _receive(connection)
-                if kind == "timeout":
-                    raise TimeoutError("training sampling deadline reached")
-                if kind == "error":
-                    raise RuntimeError(f"sampler {index} failed:\n{value}")
-                if kind == "progress":
-                    session.progress({**value, "sampling_environment": index})
-                    continue
-                return kind, value
-            if not process.is_alive():
-                raise RuntimeError(f"sampler {index} exited: {process.exitcode}")
+            payload = ray.get(actor.receive.remote())
+            if payload is None:
+                raise RuntimeError(f"sampler {index} exited without a result")
+            if not payload:
+                continue
+            kind, value = pickle.loads(payload)
+            if kind == "timeout":
+                raise TimeoutError("training sampling deadline reached")
+            if kind == "error":
+                raise RuntimeError(f"sampler {index} failed:\n{value}")
+            if kind == "progress":
+                session.progress({**value, "sampling_environment": index})
+                continue
+            return kind, value
 
 
 def step_wave(session):
     from smartsom.config.base_diagnostic import seed_for
-    from smartsom.experiments.resource_guard import check
     from smartsom.learning.sampling import learn_packets
 
     if session.budget_done() or time.time() >= session.deadline:
@@ -252,7 +299,6 @@ def step_wave(session):
                 else:
                     packets.append((value, False))
                     continuing.append(index)
-            check("learner_update", force=True)
             started = time.monotonic()
             learn_packets(policy, packets)
             update_seconds += time.monotonic() - started
@@ -285,7 +331,13 @@ def step_wave(session):
         session.rows.append(result)
     session.commit()
     for result in list(completed.values()):
-        session.tracking.log({"phase": "train", **result})
+        session.tracking.log(
+            {
+                "phase": "train",
+                **result,
+                "event_id": f"train/episode/{result['episode']}",
+            }
+        )
     session.evaluate_periodically()
     progress = session.progress()
     return {**progress, "done": progress["status"] != "training"}

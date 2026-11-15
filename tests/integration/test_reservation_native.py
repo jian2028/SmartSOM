@@ -109,91 +109,177 @@ def test_evaluation_skips_critic_and_preserves_actions(monkeypatch):
         assert policy.choose(request, None) == request.candidates[index.item()].action
 
 
-def test_native_public_run_freezes_inputs_and_smokes_all_methods(tmp_path):
+def test_public_run_freezes_inputs_and_smokes_rules_and_official_learner(tmp_path):
     pytest.importorskip("torch")
+    import yaml
+
     from smartsom.config.reservation import compile_reservation
     from smartsom.experiments.reservation import run
 
-    path = ROOT / "experiments/examples/small/default/experiment.yaml"
+    path = tmp_path / "experiment.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema": "smartsom.base-experiment/v1",
+                "scenario": str(ROOT / "configs/scenarios/small.yaml"),
+                "algorithm": str(ROOT / "configs/algorithms/rllib-base-ppo.yaml"),
+                "run": {"task": "smoke", "methods": ["rule", "random", "configured"]},
+                "final_evaluation": False,
+                "periodic_evaluation": {"milestones": []},
+                "tracking": {"mode": "disabled"},
+            }
+        )
+    )
+    profile = tmp_path / "profile.yaml"
+    profile.write_text(
+        yaml.safe_dump(
+            {
+                "resources": {"cpus": 1},
+                "rllib": {"env_runners": {"num_env_runners": 0}},
+            }
+        )
+    )
     overrides = [
         f'experiment.run.output="{tmp_path / "run"}"',
         "experiment.run.smoke_ticks=40",
-        "algorithm.production.policies.ppo.learner.params.epochs=1",
+        "algorithm.production.policies.ppo.learner.params={train_batch_size_per_learner: 64, minibatch_size: 32, num_epochs: 1}",
     ]
-    summary = compile_reservation(path, sets=overrides).summary()
+    summary = compile_reservation(path, sets=overrides, profile=profile).summary()
     assert summary["machines"] == 8 and summary["orders"] == 128
     assert not (tmp_path / "run").exists()
-    plan = compile_reservation(path, sets=overrides)
+    plan = compile_reservation(path, sets=overrides, profile=profile)
     result = run(plan, display_options={"progress": "off", "verbose": False})
     assert result["status"] == "completed"
     rows = json.loads((tmp_path / "run/summary.json").read_text())["results"]
     assert {r["method"] for r in rows} == {"rule", "random", "ppo"}
-    assert all(r["tick"] == 40 for r in rows)
-    assert rows[-1]["updates"] > 0
-    assert (tmp_path / "run/last.pt").is_file()
+    assert all(r["tick"] == 40 for r in rows[:-1])
+    assert rows[-1]["physical_ticks"] >= 40
+    assert rows[-1]["algorithm_iteration"] > 0
+    (reference,) = (tmp_path / "run").glob("checkpoint-refs-*.json")
+    last = json.loads(reference.read_text())["last"]
+    assert (Path(last["path"]) / "algorithm_state.pkl").is_file()
+    assert not (tmp_path / "run/last.pt").exists()
     assert (tmp_path / "run/inputs/factory.yaml").is_file()
     with pytest.raises(ValueError, match="already exists"):
         run(plan, display_options={"progress": "off", "verbose": False})
 
 
-def test_native_calibration_train_and_evaluate_share_scenario_identity(tmp_path):
-    pytest.importorskip("torch")
-    from smartsom import api
-    from smartsom.config.reservation import compile_reservation
+def test_public_calibration_train_and_final_panels_share_scenario_identity(
+    tmp_path, monkeypatch
+):
+    from tests.helpers.rllib_runtime import author_runtime, command, last_checkpoint
 
-    inputs = tmp_path / "standalone-inputs"
-    inputs.mkdir()
-    path = compile_reservation(
-        ROOT / "experiments/examples/small/default/experiment.yaml",
-        sets=["experiment.tracking.mode=disabled"],
-    ).materialize(inputs)
-    shared = [
-        "scenario.jobs.orders.total=8",
-        "scenario.jobs.orders.initial=4",
-        "scenario.jobs.arrivals.mean_interval_ticks=4",
-        "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
-        "algorithm.production.policies.ppo.learner.params.epochs=1",
-        "experiment.periodic_evaluation_cases=4",
-        "experiment.test_cases=4",
-        "experiment.run.seconds=120",
-    ]
-
-    def execute(task, extra):
-        return api.run_experiment(
-            path,
-            sets=shared
-            + [
-                f"experiment.run.task={task}",
-                f'experiment.run.output="{tmp_path / task}"',
-            ]
-            + extra,
-        )
-
-    execute("calibrate", ["experiment.run.calibration_cases=1"])
-    proof = tmp_path / "calibrate/calibration.json"
-    assert json.loads(proof.read_text())["status"] == "frozen"
-    calibrated = [f'experiment.run.calibration="{proof}"']
-    result = execute("train", calibrated + ["experiment.train_ticks=80"])
-    assert result["physical_ticks"] == 80 and result["updates"] > 0
-    execute(
-        "evaluate",
-        calibrated
-        + [
-            f'experiment.run.checkpoint="{tmp_path / "train/last.pt"}"',
-            "experiment.run.selection=argmax",
-        ],
+    path, profile = author_runtime(tmp_path / "official", evaluation=True)
+    calibration = tmp_path / "calibration"
+    command(
+        "run",
+        path,
+        "--profile",
+        profile,
+        "--set",
+        "experiment.run.task=calibrate",
+        "--set",
+        f'experiment.run.output="{calibration}"',
+        "--progress",
+        "off",
     )
-    rows = [
+    proof = calibration / "calibration.json"
+    calibrated = json.loads(proof.read_text())
+    assert calibrated["status"] == "frozen" and len(calibrated["results"]) == 8
+    command(
+        "run",
+        path,
+        "--profile",
+        profile,
+        "--set",
+        f'experiment.run.calibration="{proof}"',
+        "--progress",
+        "off",
+    )
+    root = path.parent / "run"
+    report = json.loads((root / "batch.json").read_text())
+    assert report["status"] == "completed" and report["algorithm_iteration"] > 0
+    assert report["physical_ticks"] >= 80
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert manifest["drain_ticks"] == calibrated["drain_ticks"]
+    for name in ("factory", "workload", "algorithm"):
+        assert manifest["inputs"][name] == calibrated["inputs"][name]
+    assert (root / "inputs/calibration.json").read_bytes() == proof.read_bytes()
+    panel = report["final_evaluation"]["last"]
+    assert panel["selection_mode"] == "sample" and len(panel["cases"]) == 4
+    assert len({case["case_id"] for case in panel["cases"]}) == 4
+    assert all(
+        case["joint_cost"] is None for case in panel["cases"] if case["truncated"]
+    )
+    refs = json.loads(next(root.glob("checkpoint-refs-*.json")).read_text())
+    checkpoint = last_checkpoint(root)
+    reports = [
         json.loads(line)
-        for line in (tmp_path / "evaluate/cases.jsonl").read_text().splitlines()
+        for line in (checkpoint.parent / "result.json").read_text().splitlines()
     ]
-    assert len(rows) == 12
-    assert all(row["selection"] == "argmax" for row in rows)
-    assert len({row["scenario_seed"] for row in rows}) == 1
-    summary = json.loads((tmp_path / "evaluate/summary.json").read_text())
-    for method in summary.values():
-        if method["all"]["not_drained_rate"]:
-            assert method["all"]["passing_rate"] is None
+    periodic = [r["evaluation"]["env_runners"] for r in reports if "evaluation" in r]
+    assert periodic and all(len(panel["cases"]) == 4 for panel in periodic)
+    if refs["best"] is not None:
+        eligible = [panel for panel in periodic if panel["complete_panel"]]
+        assert eligible
+        assert refs["best"]["score"] == min(panel["joint_cost"] for panel in eligible)
+        assert len(report["final_evaluation"]["best"]["cases"]) == 4
+        assert {
+            case["case_id"] for case in report["final_evaluation"]["best"]["cases"]
+        } == {case["case_id"] for case in panel["cases"]}
+    assert (
+        json.loads((last_checkpoint(root) / "smartsom-runtime.json").read_text())[
+            "phase"
+        ]
+        == "complete"
+    )
+
+    # Exercise the actual PPO restore entry with its committed metadata. A bad
+    # restore must fail before constructing/replacing an Algorithm or publishing
+    # a successful execution origin. No second training run is needed.
+    from types import SimpleNamespace
+
+    from ray.rllib.algorithms.algorithm import Algorithm
+
+    from smartsom.experiments.rllib_trainable import RLlibTrainable
+
+    metadata = (checkpoint / "smartsom-runtime.json").read_bytes()
+    evidence = {
+        p: p.read_bytes() for p in (root / "control/tune-provenance").rglob("*.json")
+    }
+    monkeypatch.setattr(
+        Algorithm,
+        "from_checkpoint",
+        lambda *_: pytest.fail("invalid metadata reached Algorithm construction"),
+    )
+    for corruption in ("missing", "json", "trial", "origin"):
+        damaged = tmp_path / f"damaged-{corruption}"
+        damaged.mkdir()
+        state = json.loads(metadata)
+        if corruption == "trial":
+            state["execution"]["trial_id"] = "wrong-trial"
+        elif corruption == "origin":
+            state["execution"]["producer_attempt"] = "unknown-execution"
+        if corruption != "missing":
+            (damaged / "smartsom-runtime.json").write_text(
+                "{" if corruption == "json" else json.dumps(state)
+            )
+        actor = RLlibTrainable.__new__(RLlibTrainable)
+        actor.scientific_task = None
+        actor.root = root
+        actor.algorithm = sentinel = object()
+        actor.state = {"unchanged": True}
+        actor._trial_info = SimpleNamespace(
+            trial_id=json.loads(metadata)["execution"]["trial_id"]
+        )
+        with pytest.raises((FileNotFoundError, ValueError)):
+            actor.load_checkpoint(damaged)
+        assert actor.algorithm is sentinel and actor.state == {"unchanged": True}
+        assert evidence == {
+            p: p.read_bytes()
+            for p in (root / "control/tune-provenance").rglob("*.json")
+        }
+    assert (checkpoint / "smartsom-runtime.json").read_bytes() == metadata
 
 
 def test_diagnostics_off_never_constructs_counters_and_rules_skip_critic(monkeypatch):

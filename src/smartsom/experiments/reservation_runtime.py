@@ -18,8 +18,6 @@ from smartsom.domain.base_decisions import BASE_CONTRACT
 from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments.control import boundary
 from smartsom.experiments.evidence import write_json
-from smartsom.experiments.resource_guard import check as check_resources
-from smartsom.experiments.resource_guard import guarded
 from smartsom.traffic import build_mover
 
 CONDITIONS = ("normal", "low", "medium", "high")
@@ -126,7 +124,7 @@ def freeze(root, paths, task, extra):
             manifest.get(key) != value for key, value in extra.items()
         ):
             raise ValueError("frozen training settings mismatch")
-        if task not in {"train", "evaluate", "calibration"}:
+        if task not in {"train", "evaluate", "calibration", "smoke"}:
             raise ValueError("this task does not support unfinished continuation")
         history = manifest.get("execution_history", [])
         platform = current["environment"]["platform"]
@@ -197,6 +195,7 @@ def metrics(sim, options, condition, seed, elapsed_seconds, decisions):
         "completed": done,
         "total_orders": n,
         "unfinished": n - done,
+        "makespan": max(sim.shipment_times.values()) if complete else None,
         "mean_tardiness": tardiness / n if complete else None,
         "passing_rate": (done - failed) / done if done else None,
         "final_passing_rate": (done - failed) / n if complete else None,
@@ -274,6 +273,7 @@ def _episode(
     control_check=None,
     on_fragment=None,
     fragment_ticks=256,
+    task_objective=False,
 ):
     if diagnostics:
         if observer is not None:
@@ -523,6 +523,10 @@ def _episode(
     report = metrics(
         sim, options, condition, seed, time.monotonic() - started, decisions
     )
+    if task_objective:
+        from smartsom.rewards.normalized_task import task_metrics
+
+        report.update(task_metrics(sim))
     if training_cut and sim.status != "completed":
         report["termination_reason"] = "training_budget_cut"
     if wall_fragment:
@@ -619,7 +623,6 @@ def case_store(root, paths, phase, cases, extra, *, scenarios=None):
 def commit_case(store, index, result):
     from smartsom.config.codec import digest
 
-    check_resources("case_commit", force=True)
     case = store.cases[index]
     store.commit(
         index,
@@ -633,13 +636,15 @@ def commit_case(store, index, result):
             "payload": result,
         },
     )
-    check_resources("case_committed", force=True)
 
 
 def publish_cases(root, store):
     temporary = root / "cases.jsonl.tmp"
     temporary.write_text(
-        "".join(json.dumps(store.rows[i]["payload"]) + "\n" for i in sorted(store.rows))
+        "".join(
+            json.dumps(store.rows[i]["payload"], sort_keys=True) + "\n"
+            for i in sorted(store.rows)
+        )
     )
     temporary.replace(root / "cases.jsonl")
 
@@ -667,7 +672,6 @@ def evaluate(args):
         return result
 
 
-@guarded
 def run_cases(args, function):
     from smartsom.experiments.evaluation_resume import stage_lock
 
@@ -694,8 +698,10 @@ def _calibrate(args):
             "max_drain": args.max_drain,
         },
     )
-    deadline = time.monotonic() + max(
-        0, manifest["started_unix"] + args.seconds - time.time()
+    deadline = (
+        time.monotonic() + max(0, manifest["started_unix"] + args.seconds - time.time())
+        if args.seconds is not None
+        else float("inf")
     )
     store = case_store(
         root,
@@ -739,11 +745,9 @@ def _calibrate(args):
                     return current
 
                 try:
-                    check_resources("calibration_model_build", force=True)
                     policy = build_policy(
                         baseline, seed_for(seed, method), training=False
                     )
-                    check_resources("calibration_rollout", force=True)
                     result, _, _ = episode(
                         *ex.inputs_for(condition, f, w),
                         baseline,
@@ -756,6 +760,7 @@ def _calibrate(args):
                         diagnostics=ex.run.diagnostics,
                         metrics_level=ex.run.metrics,
                         metric_interval=ex.run.metric_interval,
+                        control_check=getattr(args, "control_check", None),
                     )
                 except TimeoutError:
                     unresolved = True
@@ -853,7 +858,6 @@ def frozen_drain(args, paths):
     return report["drain_ticks"]
 
 
-@guarded
 def train(args):
     from smartsom.experiments.reservation_session import train as execute
 
@@ -943,7 +947,6 @@ def evaluate_case(settings, task, prepared, *, on_progress=None, control_check=N
     sampling_seed = (
         policy_seed if task["explicit_seed"] or not learning else policy_seed % (2**31)
     )
-    check_resources("evaluation_model_build", force=True)
     policy = build_policy(
         scenario_options,
         sampling_seed,
@@ -951,16 +954,13 @@ def evaluate_case(settings, task, prepared, *, on_progress=None, control_check=N
         selection=args.selection,
         numerical_threads=getattr(args, "numerical_threads", 1),
     )
-    check_resources("evaluation_model_built", force=True)
     if learning:
         if (
             hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
             != checkpoint_digest
         ):
             raise ValueError("evaluation checkpoint changed during panel")
-        check_resources("evaluation_model_load", force=True)
         policy.load(args.checkpoint)
-        check_resources("evaluation_model_loaded", force=True)
         if (
             hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
             != checkpoint_digest
@@ -975,7 +975,6 @@ def evaluate_case(settings, task, prepared, *, on_progress=None, control_check=N
         case_limited = deadline is None or limit < deadline
         if case_limited:
             case_deadline = limit
-    check_resources("evaluation_rollout", force=True)
     result, _, _ = episode(
         *ex.inputs_for(condition, f, w),
         scenario_options,
@@ -1003,6 +1002,7 @@ def evaluate_case(settings, task, prepared, *, on_progress=None, control_check=N
         progress_interval=ex.display.summary_interval,
         on_progress=on_progress,
         control_check=control_check,
+        task_objective=not learning,
     )
     return result, learning, sampling_seed, case_limited
 
@@ -1188,6 +1188,7 @@ def _evaluate(args):
         "deadline": deadline,
         "source": manifest["source"],
         "inputs": identity(paths),
+        "worker_resources": getattr(args, "worker_resources", None),
     }
     results = [store.rows[i]["payload"] for i in sorted(store.rows)]
     tasks = []
@@ -1230,29 +1231,20 @@ def _evaluate(args):
             display_root=args._tracking.root,
         )
 
-    from smartsom.experiments.phase_resources import EvaluationLease
-
     with ExitStack() as resources:
-        lease = EvaluationLease(
-            ex.concurrency.evaluation_processes,
-            baseline_cpus=1 + ex.sampling.processes,
-            budget=ex.resources,
-            cpus=ex.concurrency.evaluation_cpus,
-        )
-        resources.callback(lease.close)
         outcomes = resources.enter_context(
             closing(
                 case_results(
                     settings,
                     tasks,
                     (ex, f, w, a, paths),
-                    workers=min(
+                    workers=getattr(args, "evaluation_workers", None)
+                    or min(
                         ex.concurrency.evaluation_processes,
                         ex.concurrency.evaluation_cpus
                         or ex.concurrency.evaluation_processes,
                     ),
                     on_progress=progress,
-                    capacity=lease.target if lease.binding else None,
                 )
             )
         )
@@ -1312,6 +1304,7 @@ def _evaluate(args):
                     "training_progress": getattr(args, "training_progress", None),
                     "case_index": case_index,
                     **result,
+                    "event_id": f"panel/{root.relative_to(args._tracking.root).as_posix()}/case/{case_index}",
                 }
             )
             results.append(result)
@@ -1428,8 +1421,9 @@ def _evaluate(args):
     args._tracking.log(
         {
             "phase": "periodic_evaluation"
-            if getattr(args, "tracking", None)
+            if args.split == "periodic_evaluation"
             else "evaluation",
+            "event_id": f"panel/{root.relative_to(args._tracking.root).as_posix()}/summary",
             "kind": "summary",
             "training_progress": getattr(args, "training_progress", None),
             "selection": args.selection,

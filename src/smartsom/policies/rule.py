@@ -25,14 +25,23 @@ class BaseRule:
             return self.rng.choice(candidates).action
         if request.group == "dispatcher" and candidates[-1].action == ("EMPTY_WAIT",):
             candidates = candidates[:-1]
-        # EDD for process/service; normal mode; nearest eligible resource with
+        # EDD for process/service; critical-ratio speed; nearest eligible resource with
         # ready supply preferred; accept all feasible requests without STOP.
         if request.group == "machine":
-            normal = [c for c in candidates if c.action[1] == "normal"]
+            jobs = request.inputs["machine_jobs"]
+            job = min(
+                jobs,
+                key=lambda j: (jobs[j]["due_ticks"], jobs[j]["normal_ticks"], j),
+            )
+            due, work = jobs[job]["due_ticks"], jobs[job]["remaining_normal_ticks"]
+            # Integer comparisons preserve the exact CR=1 and CR=1.2 boundaries.
+            mode = "fast" if due < work else "normal" if 5 * due < 6 * work else "slow"
+            available = [c for c in candidates if c.action[0] == job]
             selected = min(
-                normal or candidates,
+                available,
                 key=lambda c: (
-                    values[c.identity]["due_slack"],
+                    c.action[1] != mode,
+                    c.action[1] != "normal",
                     values[c.identity]["nominal_duration"],
                     c.identity,
                 ),

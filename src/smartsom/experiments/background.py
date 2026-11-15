@@ -40,7 +40,6 @@ def _require_plan(root):
             "smartsom.reservation-plan/v1",
             "smartsom.tune-batch/v1",
             "smartsom.author-batch-plan/v1",
-            "smartsom.live-queue-plan/v1",
         }
         or not (root / "batch.json").is_file()
     ):
@@ -50,9 +49,6 @@ def _require_plan(root):
 
 
 def _check_owner(root):
-    from smartsom.experiments.queue_admission import check_registration
-
-    check_registration(root)
     owner = control.read(root)
     if owner is None:
         return
@@ -195,15 +191,12 @@ def _lifecycle_status(root, result=None):
 
 @operation("run")
 def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=False):
-    from smartsom.experiments.batch_retry import check_root_recovery
-
-    check_root_recovery(root)
     bind(root)
     schema = _read_json(root / "plan.json").get("schema")
     if schema == "smartsom.reservation-plan/v1":
         from smartsom.experiments.reservation import execute_saved
 
-        return execute_saved(root)
+        return execute_saved(root, retry_failed=retry_failed)
     if schema == "smartsom.author-batch-plan/v1":
         if max_concurrent is not None or recommend_only:
             raise ValueError("batch directory uses its frozen scheduling settings")
@@ -220,11 +213,6 @@ def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=Fa
 def child(root, *, nonce, resume=False):
     """Private child entry. A terminal cannot provide its input or lifetime."""
     root = Path(root).expanduser().resolve()
-    from smartsom.experiments.batch_retry import check_root_recovery
-
-    # Check before Scope.bind or startup acknowledgement; do not rewrite old
-    # ownership evidence when a prior retry launch is uncertain.
-    check_root_recovery(root)
     scope, token = None, None
     status = "failed"
     try:
@@ -340,16 +328,9 @@ def launch(
         raise ValueError("background concurrency must be a positive integer")
     root = Path(root).expanduser().resolve()
     _require_plan(root)
-    from smartsom.experiments.batch_retry import check_root_recovery
-
-    check_root_recovery(root)
-    from smartsom.experiments.queue_admission import check_registration
-
-    check_registration(root)
     _check_owner(root)
     nonce = uuid4().hex
     process, created = None, None
-    spawn_attempted = False
     request_path = root / "control/background-request.json"
     try:
         display = asdict(DisplayOptions.from_value(display_options))
@@ -389,7 +370,6 @@ def launch(
                 root / "logs/stderr.log",
             )
             with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
-                spawn_attempted = True
                 process = subprocess.Popen(
                     command,
                     stdin=subprocess.DEVNULL,
@@ -447,19 +427,6 @@ def launch(
         # An interrupted constructor can have forked without returning its
         # handle. Retain ownership in that uncertain window. Ordinary Popen
         # OSErrors use its failed-exec/reap path; preparation never spawned.
-        if process is None and (not spawn_attempted or isinstance(exc, OSError)):
-            try:
-                plan = _read_json(root / "plan.json")
-                if plan.get("schema") == "smartsom.live-queue-plan/v1":
-                    from smartsom.experiments.queue_admission import rollback_unstarted
-
-                    rollback_unstarted(
-                        plan["admission_root"],
-                        root,
-                        owner_id=plan["admission_owner_id"],
-                    )
-            except (OSError, ValueError) as cleanup:
-                exc.add_note(f"startup claim retained: {cleanup}")
         try:
             if request_path.is_file():
                 request = _read_json(request_path)

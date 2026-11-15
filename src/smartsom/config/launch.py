@@ -4,32 +4,53 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from smartsom.config.codec import ConfigurationError, StrictModel, digest, read_document
+from smartsom.config.rllib_resources import RLlibResources
+from smartsom.config.trial_resources import TrialResources
 
 
 class Launch(StrictModel):
     mode: Literal["foreground", "background"] = "foreground"
 
 
-class ResourceGuard(StrictModel):
-    max_worker_rss_gib: float = Field(gt=0, allow_inf_nan=False)
-    min_host_available_gib: float = Field(gt=0, allow_inf_nan=False)
-    min_disk_free_gib: float = Field(gt=0, allow_inf_nan=False)
-
-
 class Resources(StrictModel):
     cpus: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     memory_gib: float | None = Field(default=None, gt=0, allow_inf_nan=False)
-    guard: ResourceGuard | None = None
+    gpus: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+    @model_validator(mode="before")
+    @classmethod
+    def removed_guard(cls, value):
+        if isinstance(value, dict) and "guard" in value:
+            raise ConfigurationError(
+                "resources.guard was removed; use Ray resource declarations in a profile"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def whole_local_cpu_budget(self):
+        if self.cpus is not None and self.cpus != int(self.cpus):
+            raise ConfigurationError(
+                "Ray local runtime requires a whole-number total resources.cpus"
+            )
+        return self
 
 
 class Concurrency(StrictModel):
     evaluation_processes: int = Field(default=1, strict=True, gt=0, le=64)
     evaluation_cpus: int | None = Field(default=None, strict=True, gt=0, le=64)
-    mode: Literal["manual", "adaptive"] = "manual"
-    max_concurrent: int = Field(default=2, gt=0, le=1024)
+    max_concurrent: int | None = Field(default=None, gt=0, le=1024)
+
+    @model_validator(mode="before")
+    @classmethod
+    def removed_mode(cls, value):
+        if isinstance(value, dict) and "mode" in value:
+            raise ConfigurationError(
+                "concurrency.mode was removed; Tune admits trials from declared resources"
+            )
+        return value
 
 
 class Display(StrictModel):
@@ -50,6 +71,8 @@ class Tracking(StrictModel):
 
 
 class Profile(StrictModel):
+    rllib: RLlibResources = Field(default_factory=RLlibResources)
+    trial_resources: TrialResources = Field(default_factory=TrialResources)
     launch: Launch = Field(default_factory=Launch)
     concurrency: Concurrency = Field(default_factory=Concurrency)
     resources: Resources = Field(default_factory=Resources)
@@ -120,19 +143,23 @@ def merge(target, incoming):
             target[key] = value
 
 
-def resolve_operations(experiment, *, profile=None, cli=None):
+def resolve_operations(experiment, *, profile=None, cli=None, base=None):
     result = Profile().model_dump(mode="json")
     origins = dict.fromkeys(flatten(result), "default")
+    if base is not None:
+        saved = Profile.model_validate(base).model_dump(mode="json")
+        merge(result, saved)
+        origins.update(dict.fromkeys(flatten(saved), "saved execution"))
+    if "trial_resources" in experiment or "rllib" in experiment:
+        raise ConfigurationError(
+            "trial_resources and rllib belong in an execution profile"
+        )
     authored = {key: deepcopy(experiment[key]) for key in result if key in experiment}
     # Existing current configs keep their scheduling defaults until explicitly overridden.
     run = experiment.get("run", {})
     if "max_concurrent" in run:
         authored.setdefault("concurrency", {}).setdefault(
             "max_concurrent", run["max_concurrent"]
-        )
-    if "resource_execution" in run:
-        authored.setdefault("concurrency", {}).setdefault(
-            "mode", "adaptive" if run["resource_execution"] == "adaptive" else "manual"
         )
     sources = [("experiment", authored)]
     if profile:

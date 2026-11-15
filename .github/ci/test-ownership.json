@@ -3,7 +3,7 @@
   "suites": {
     "fast": {
       "tier": "fast",
-      "cost": "lean core, configuration, CLI and native scheduler contracts",
+      "cost": "lean core, configuration, CLI and frozen scientific inventory contracts",
       "domains": [
         "core",
         "config",
@@ -15,23 +15,14 @@
       "extras": [],
       "requires": [],
       "selectors": [
-        "tests/integration/test_runtime_scheduler.py",
-        "tests/integration/test_retry_driver_recovery.py",
-        "tests/integration/test_batch_cleanup_lifecycle.py",
         "tests/test_package_import.py",
         "tests/unit/test_algorithm_components.py",
         "tests/unit/test_base_reservations.py",
-        "tests/unit/test_batch_append_ownership.py",
-        "tests/unit/test_batch_cleanup.py",
-        "tests/unit/test_batch_retry_control.py",
-        "tests/unit/test_batch_retry_validation.py",
-        "tests/unit/test_batch_growth_order.py",
         "tests/unit/test_batch_seed_selection.py",
         "tests/unit/test_boundary_copy.py",
         "tests/unit/test_buffers.py",
         "tests/unit/test_ci_selection.py",
         "tests/unit/test_console_resilience.py",
-        "tests/unit/test_current_runtime.py",
         "tests/unit/test_observation_caches.py",
         "tests/unit/test_dashboard_specs.py",
         "tests/unit/test_domain.py",
@@ -39,16 +30,17 @@
         "tests/unit/test_experiment_tracking.py",
         "tests/unit/test_factory_design.py",
         "tests/unit/test_factory_design_config.py",
+        "tests/unit/test_factory_episode.py",
         "tests/unit/test_factory_reliability.py",
         "tests/unit/test_holding.py",
         "tests/unit/test_incremental_batch.py",
         "tests/unit/test_launch_workflow.py",
         "tests/unit/test_map_catalog.py",
         "tests/unit/test_map_geometry.py",
-        "tests/unit/test_online_concurrency.py",
+        "tests/unit/test_normalized_task_cost.py",
+        "tests/unit/test_rllib_evaluation.py",
         "tests/unit/test_operation_catalog.py",
         "tests/unit/test_paired_export.py",
-        "tests/unit/test_performance_profiles.py",
         "tests/unit/test_performance_rows.py",
         "tests/unit/test_port_target_decode.py",
         "tests/unit/test_portable_control.py",
@@ -65,7 +57,6 @@
         "tests/unit/test_run_control.py",
         "tests/unit/test_runtime_control.py",
         "tests/unit/test_runtime_display.py",
-        "tests/unit/test_runtime_resources.py",
         "tests/unit/test_scenario_authoring.py",
         "tests/unit/test_schedule_replay.py",
         "tests/unit/test_studio_cli.py",
@@ -76,7 +67,10 @@
         "tests/unit/test_task_performance.py",
         "tests/unit/test_trace_cursor.py",
         "tests/unit/test_transport.py",
-        "tests/unit/test_resource_guard.py"
+        "tests/unit/test_trial_resources.py",
+        "tests/unit/test_tune_checkpoint.py",
+        "tests/unit/test_tune_search_config.py",
+        "tests/unit/test_tune_config_migration.py"
       ],
       "primary": true,
       "allow_skips": {
@@ -133,11 +127,14 @@
       ],
       "extras": [
         "cpu",
-        "learning"
+        "learning",
+        "tuning"
       ],
       "requires": [
         "torch",
-        "numpy"
+        "numpy",
+        "ray",
+        "ray.tune"
       ],
       "selectors": [
         "tests/integration/test_component_learner.py",
@@ -147,20 +144,17 @@
         "tests/unit/test_checkpoint_retention.py",
         "tests/unit/test_workflow_dashboard.py",
         "tests/integration/test_rule_learning.py",
-        "tests/integration/test_retry_dqn_worker.py",
-        "tests/integration/test_retry_official_learner.py",
-        "tests/integration/test_resource_guard_lifecycle.py",
         "tests/integration/test_controller_comparison.py",
         "tests/integration/test_training_components.py",
         "tests/integration/test_e1a_network.py",
-        "tests/integration/test_training_sampling_controls.py"
+        "tests/integration/test_implicit_social_fusion_contracts.py"
       ],
       "primary": true,
       "allow_skips": {}
     },
     "tuning": {
       "tier": "native",
-      "cost": "measured calibration, Ray continuation, pause/restore and actor failure safety",
+      "cost": "resident RLlib/Tune resources, search, continuation and worker failure contracts",
       "domains": [
         "tuning",
         "learning",
@@ -175,7 +169,8 @@
         "cpu",
         "learning",
         "tuning",
-        "tensorboard"
+        "tensorboard",
+        "wandb"
       ],
       "requires": [
         "numpy",
@@ -185,34 +180,24 @@
         "psutil",
         "threadpoolctl",
         "tensorboard",
-        "pyarrow.fs"
+        "pyarrow.fs",
+        "wandb",
+        "ray.rllib"
       ],
       "selectors": [
         "tests/integration/test_reservation_tune.py",
-        "tests/integration/test_tuning_ray_adapter.py",
-        "tests/unit/test_probe_publication.py",
-        "tests/unit/test_tuning_broker.py",
-        "tests/unit/test_tuning_calibration.py",
         "tests/unit/test_tuning_dashboard.py",
-        "tests/unit/test_tuning_probe.py",
-        "tests/unit/test_tuning_ray.py",
-        "tests/unit/test_tuning_resources.py"
+        "tests/unit/test_tuning_resources.py",
+        "tests/integration/test_tune_phase_execution.py",
+        "tests/unit/test_current_runtime.py",
+        "tests/unit/test_tune_progress.py",
+        "tests/integration/test_rllib_dqn_checkpoint.py",
+        "tests/integration/test_rllib_observation.py",
+        "tests/integration/test_rllib_factory_training.py",
+        "tests/integration/test_rllib_central.py"
       ],
       "primary": true,
-      "allow_skips": {
-        "tests/unit/test_probe_publication.py::test_native_windows_reader_release_allows_publication": {
-          "platforms": [
-            "ubuntu-latest"
-          ],
-          "reason": "native Windows file sharing"
-        },
-        "tests/unit/test_probe_publication.py::test_native_windows_held_reader_fails_within_remaining_deadline": {
-          "platforms": [
-            "ubuntu-latest"
-          ],
-          "reason": "native Windows file sharing"
-        }
-      }
+      "allow_skips": {}
     },
     "resource-learning": {
       "tier": "native",
@@ -227,17 +212,19 @@
       ],
       "extras": [
         "cpu",
-        "learning"
+        "learning",
+        "tuning"
       ],
       "requires": [
         "torch",
-        "numpy"
+        "numpy",
+        "ray",
+        "ray.tune"
       ],
       "selectors": [
         "tests/integration/test_base_ppo.py",
         "tests/integration/test_current_learning.py",
         "tests/integration/test_network_ownership.py",
-        "tests/integration/test_research_nodes.py",
         "tests/integration/test_v2_components.py"
       ],
       "primary": true,
@@ -340,14 +327,11 @@
         "pyarrow.fs"
       ],
       "selectors": [
-        "tests/integration/test_runtime_scheduler.py",
         "tests/unit/test_portable_control.py",
         "tests/unit/test_portable_paths.py",
-        "tests/unit/test_probe_publication.py",
         "tests/unit/test_run_control.py",
         "tests/unit/test_runtime_control.py",
         "tests/unit/test_runtime_display.py",
-        "tests/unit/test_runtime_resources.py",
         "tests/unit/test_workflow_dashboard.py"
       ],
       "primary": false,
@@ -409,7 +393,7 @@
     },
     "macos-learning": {
       "tier": "native",
-      "cost": "intentional native platform contract repetition",
+      "cost": "official RLlib training and checkpoint platform acceptance",
       "domains": [
         "learning",
         "checkpoint",
@@ -421,24 +405,31 @@
       ],
       "extras": [
         "cpu",
-        "learning"
+        "learning",
+        "tuning"
       ],
       "requires": [
         "torch",
-        "numpy"
+        "numpy",
+        "ray",
+        "ray.tune",
+        "ray.rllib",
+        "gymnasium"
       ],
       "selectors": [
         "tests/unit/test_background.py",
         "tests/unit/test_boundary_copy.py",
         "tests/unit/test_checkpoint_retention.py",
-        "tests/integration/test_training_sampling_controls.py"
+        "tests/integration/test_rllib_factory_training.py::test_official_factory_sampling_and_learning[attention-shared-ppo]",
+        "tests/integration/test_rllib_factory_training.py::test_official_factory_sampling_and_learning[attention-shared-dqn]",
+        "tests/integration/test_rllib_central.py"
       ],
       "primary": false,
       "allow_skips": {}
     },
     "learning-public": {
       "tier": "native",
-      "cost": "native calibration, evaluation receipts and real worker control",
+      "cost": "scientific calibration and official RLlib whole-run CLI lifecycle",
       "domains": [
         "core",
         "learning",
@@ -452,11 +443,17 @@
       ],
       "extras": [
         "cpu",
-        "learning"
+        "learning",
+        "tuning",
+        "wandb"
       ],
       "requires": [
         "torch",
-        "numpy"
+        "numpy",
+        "ray",
+        "ray.tune",
+        "wandb",
+        "ray.rllib"
       ],
       "selectors": [
         "tests/integration/test_reservation_lifecycle.py"

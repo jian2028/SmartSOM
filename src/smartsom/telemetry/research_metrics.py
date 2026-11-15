@@ -50,6 +50,7 @@ def aggregate(row):
         "final_passing_rate": (done - failed) / n if complete else None,
         "throughput_per_1000_ticks": ratio(1000 * done, tick),
         "qualified_throughput_per_1000_ticks": ratio(1000 * (done - failed), tick),
+        "makespan": row.get("makespan") if complete else None,
         "mean_tardiness": row.get("mean_tardiness") if complete else None,
         "joint_cost": row.get("joint_cost") if complete else None,
         "cost_status": (
