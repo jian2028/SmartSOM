@@ -237,11 +237,20 @@ from tests.integration.test_rllib_dqn_checkpoint import assert_state_equal
 root, repository = Path(sys.argv[1]), Path(sys.argv[2])
 limit, exhaust, method = int(sys.argv[3]), sys.argv[4]=='exhaust', sys.argv[5]
 action=sys.argv[6]
-path, profile = (author_runtime(root/'inputs', method, ticks=1000 if method=='dqn' else 200, evaluation=False)
+path, profile = (author_runtime(root/'inputs', method, ticks=200, evaluation=False)
                  if action=='run' else (root/'inputs/experiment.yaml', root/'inputs/profile.yaml'))
 output=path.parent/'run'
 marker=root/'injected-failure'
 class FailOnce(rllib_trainable.RLlibTrainable):
+    def setup(self, config):
+        super().setup(config)
+        if method=='dqn':
+            # Test recovery at short official iteration boundaries. The default
+            # 1000-step DQN report can exhaust this fixture's 120-second budget
+            # before the second step can inject its post-checkpoint failure.
+            self.algorithm_config.env_runners(rollout_fragment_length=32).reporting(
+                min_sample_timesteps_per_iteration=64, min_time_s_per_iteration=0,
+            )
     def step(self):
         if self.algorithm is not None and self.algorithm.iteration==1 and (exhaust or not marker.exists()):
             if method=='dqn':
