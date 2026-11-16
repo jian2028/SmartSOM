@@ -33,6 +33,12 @@ conversion. Unusual custom values retain the original Torch conversion rules. Sh
 float32 observations, masks, ordering and fixed-capacity padding are unchanged;
 the official connector still owns conversion to model inputs.
 
+Implicit attention embeds input/post acceptance supply once per owner in the
+current batch, then shares those embeddings across candidate queries. Concat
+retains its ordered candidate layout. This reuse does not span forward calls or
+cache tensors across updates; observations, parameters and checkpoint keys remain
+unchanged. Floating-point gradient accumulation can differ by roundoff.
+
 Observation components construct statistics and fixed input data; network
 components construct learned encodings and masked action scores. BaseInputs holds
 Base context, four sets and candidate vectors; implicit SL appends peer relations

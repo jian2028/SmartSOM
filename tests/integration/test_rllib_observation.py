@@ -596,3 +596,68 @@ def test_critic_reuse_preserves_every_frame_and_observation_ownership(
     finally:
         for env in envs:
             env.close()
+
+
+@pytest.mark.parametrize("group", ["input", "post"])
+@pytest.mark.parametrize("batch_size", [1, 4])
+@pytest.mark.parametrize("empty", [False, True])
+def test_shared_supply_preserves_scores_and_training_gradients(
+    group, batch_size, empty
+):
+    from copy import deepcopy
+
+    import torch
+
+    from smartsom.representations.v2._network_torch import Network
+    from smartsom.representations.v2.observation import CONTEXT, FEATURES
+    from smartsom.representations.v2.rules import CATALOG
+
+    torch.set_num_threads(1)
+    torch.manual_seed(101)
+    model = Network(group, social_enabled=True, value_head=False)
+    reference = deepcopy(model)
+    b, c, j, stations = batch_size, 9, 13, 7
+    data = {
+        "context": torch.randn(b, CONTEXT[group]),
+        "candidates": torch.randn(
+            b, c, FEATURES[group + ".accept"] + len(CATALOG[group + ".accept"])
+        ),
+        "mask": torch.rand(b, c) > 0.3,
+        "modes": torch.randn(b, c, 3),
+        "jobs": torch.randn(b, j, 3 if group == "input" else 4),
+        "job_mask": torch.zeros(b, j, dtype=torch.bool)
+        if empty
+        else torch.rand(b, j) > 0.4,
+        "job_peers": torch.randn(b, j, stations, 9),
+        "job_peer_mask": torch.zeros(b, j, stations, dtype=torch.bool)
+        if empty
+        else torch.rand(b, j, stations) > 0.4,
+        "job_meta": torch.randn(b, j, 2),
+        "job_count": torch.randn(b, 1),
+        "indices": torch.arange(b),
+    }
+    data["mask"][:, 0] = True
+    expanded = {
+        k: v.unsqueeze(1).expand(-1, c, *v.shape[1:]) if k in SUPPLY_FIELDS else v
+        for k, v in data.items()
+    }
+    # The original layout evaluates the same owner supply once per candidate.
+    sizes = []
+    handle = model.branches["accept"].job.register_forward_hook(
+        lambda module, inputs, output: sizes.append(tuple(output.shape))
+    )
+    try:
+        actual = model.actor({"size": b, "width": c, "stages": {"accept": data}})
+    finally:
+        handle.remove()
+    expected = reference.actor({"size": b, "width": c, "stages": {"accept": expanded}})
+    assert sizes == [(b, j, 32)]
+    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+    weights = torch.randn(b, c)
+    (actual[data["mask"]] * weights[data["mask"]]).sum().backward()
+    (expected[data["mask"]] * weights[data["mask"]]).sum().backward()
+    for (name, parameter), (other, original) in zip(
+        model.named_parameters(), reference.named_parameters(), strict=True
+    ):
+        assert name == other
+        torch.testing.assert_close(parameter.grad, original.grad, rtol=1e-5, atol=1e-6)

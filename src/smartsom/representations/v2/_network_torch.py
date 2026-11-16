@@ -118,18 +118,28 @@ class Branch(nn.Module):
                 parts.append(self.peers(base, batch["peers"], batch["peer_mask"]))
             elif self.group in ("post", "input") and self.stage == "accept":
                 jobs = self.job(batch["jobs"])
-                query = torch.cat(
-                    [common[:, None, None, :].expand(*jobs.shape[:-1], 32), jobs], -1
+                # RLlib carries owner supply without a candidate axis. Native
+                # packing may still carry a distinct supply for each candidate.
+                shared_supply = jobs.ndim == 3
+                owner = (
+                    common[:, None, :] if shared_supply else common[:, None, None, :]
                 )
+                query = torch.cat([owner.expand(*jobs.shape[:-1], 32), jobs], -1)
                 downstream = self.downstream(
                     query, batch["job_peers"], batch["job_peer_mask"]
                 )
                 related = self.job_relation(
                     torch.cat([jobs, downstream, batch["job_meta"]], -1)
                 )
-                parts.append(self.jobs(base, related, batch["job_mask"]))
+                job_mask = batch["job_mask"]
+                job_count = batch["job_count"]
+                if shared_supply:
+                    related = related.unsqueeze(1).expand(-1, base.shape[1], -1, -1)
+                    job_mask = job_mask.unsqueeze(1).expand(-1, base.shape[1], -1)
+                    job_count = job_count.unsqueeze(1).expand(-1, base.shape[1], -1)
+                parts.append(self.jobs(base, related, job_mask))
                 if self.group == "post":
-                    parts.append(batch["job_count"])
+                    parts.append(job_count)
             else:
                 parts.extend(
                     [

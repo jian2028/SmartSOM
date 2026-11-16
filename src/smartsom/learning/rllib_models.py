@@ -70,6 +70,8 @@ class CandidateHead(nn.Module):
             value_head=False,
         )
         self.stages = tuple(config["research_stages"])
+        # Attention embeds owner supply once; concat retains its candidate slots.
+        self.expand_supply = settings.fusion == "concat"
         width = space["stages"][self.stages[0]]["context"].shape[0]
         # A true trainable waiting value, used in ordinary transitions too.
         # The constant waiting indicator also permits an empty local context.
@@ -86,7 +88,7 @@ class CandidateHead(nn.Module):
                 data = {k: v[indices] for k, v in obs["stages"][stage].items()}
                 data = {
                     k: v.unsqueeze(1).expand(-1, mask.shape[1], *v.shape[1:])
-                    if k in SUPPLY_FIELDS
+                    if k in SUPPLY_FIELDS and self.expand_supply
                     else v
                     for k, v in data.items()
                 }
