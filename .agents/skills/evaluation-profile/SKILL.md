@@ -1,6 +1,6 @@
 ---
 name: evaluation-profile
-description: Profile SmartSOM evaluation wall-time distribution and validate performance changes against a fixed-source baseline with identical cases and checkpoints. Use for evaluation bottlenecks, cache optimizations, or before/after speed comparisons.
+description: Profile SmartSOM RLlib Base/SL and Morris training and complete-episode sampling, or legacy evaluation. Use for runtime breakdowns, episode-cost estimates, and fixed-source performance comparisons.
 ---
 
 # Evaluation profiling and optimization
@@ -15,7 +15,68 @@ For an incremental code review, use the stable pre-change revision as the immedi
 
 Compare identical workloads. Report completed/total jobs, termination reason, physical ticks/boundaries and decisions alongside time. A truncated run is not a faster completion of the same workload. A fixed-tick comparison and a completed-job comparison answer different questions. Preserve original runs; put generated evidence outside tracked source.
 
-## Measure separately
+## Current RLlib profiling
+
+Use [profile_rllib.py](scripts/profile_rllib.py) for the current Base/SL and
+centralized Morris adapters. It uses the same public Algorithm/EnvRunner path
+for both, with authored learner parameters, one local CPU learner and one local
+EnvRunner. It does not change the production profile or launch Tune campaigns.
+Training must be authorized; by default this helper performs bounded fresh
+training, then samples one complete fixed-world episode with the resulting policy.
+Use `--iterations 0` for sampling-only profiles of a freshly initialized policy,
+or `--iterations N` to bound training by official iterations instead of waiting
+for a complete training episode. Neither option changes learner parameters. For a large episode, use
+`--sample-steps N` to compare the same finite EnvRunner step workload on baseline
+and candidate; report actual physical/agent steps and in-flight metrics, not
+whole-episode throughput. The helper hashes returned observations, actions and
+rewards outside the sampling timer. That validation cost remains in end-to-end
+wall time. Keep this option identical across paired runs.
+
+```sh
+PYTHONHASHSEED=0 uv run --no-sync python .agents/skills/evaluation-profile/scripts/profile_rllib.py \
+  --source /absolute/checkout \
+  --experiment /absolute/checkout/experiments/current/medium/sl-attention-shared-ppo/experiment.yaml \
+  --output /absolute/new-evidence-directory --mode baseline --episodes 1 --seconds 900
+```
+
+Choose `morris-ppo/experiment.yaml` for Morris; the script is shared. For a machine
+with a separate locked environment, use its interpreter through `uv run
+--no-project --python /absolute/environment/bin/python` rather than syncing a live
+experiment environment. Use fresh processes and new output directories. For a stable benchmark or regression claim, alternate methods serially for at
+least three uninstrumented repetitions; then run `phases` separately. An initial
+hotspot investigation may use one uninstrumented run and one phases run per
+method, explicitly labeled preliminary rather than reporting a median or a
+passed performance threshold. Do a tiny fixture validation before expensive cases. A deadline or
+exception is a failed/incomplete measurement, never a faster episode. If an
+authored training iteration is unexpectedly expensive, retain the interrupted
+run, measure full sampling separately, and use a bounded `phases` training probe
+to locate costs. `partial-training.json` is hotspot evidence only; it cannot
+replace an uninstrumented completed-work measurement or establish training
+seconds per episode. Interrupted sampling similarly writes `partial-rollout.json`
+and available in-flight physical progress; do not label its wall time as a
+completed episode.
+
+The output freezes the world, scientific inputs, resolved AlgorithmConfig, source
+and helper hashes. Startup, official training iterations, post-training rollout,
+cleanup and driver peak RSS are separate. Training keeps official iteration
+boundaries: it can sample part of the next episode. `seconds_per_ended_episode`
+includes that extra work and counts truncations; inspect every terminal row before
+using it. The rollout is inference plus environment time, not training throughput.
+It uses a freshly trained, early policy, not a converged checkpoint. The single
+world/condition and serial worker are diagnostic choices, not an estimate of the
+whole multi-condition/multi-worker campaign. Tracking, checkpoint I/O, Tune and
+fixed-panel orchestration are excluded explicitly.
+
+`phases` wraps local sampling, inference, learner update, decision/observation,
+traffic and physical stepping. Use exclusive phase seconds for disjoint totals;
+inclusive times are nested and must not be summed. Compare each method's complete
+non-timing results and iteration workload with its own uninstrumented run, and
+report profiling overhead. Different methods need not have equal actions,
+rewards or completion time. Their speed ratio is not an implementation regression
+or the 5% migration gate. Preserve and report authored differences such as PPO
+update epochs; do not silently equalize them.
+
+## Legacy evaluation profiling
 
 The bundled [profile_case.py](scripts/profile_case.py) executes one frozen Base/SL learning evaluation in a fresh process. It supports baseline wall/CPU timing, nested phase timing, cProfile, and separate trajectory digests. Check `--help`; use the source checkout's locked uv environment. It requires a trusted native checkpoint and does not launch tracking, progress callbacks, training or panel orchestration. Report those exclusions. Unsupported policies/protocols require adapting and validating the helper, not silently changing the experiment.
 

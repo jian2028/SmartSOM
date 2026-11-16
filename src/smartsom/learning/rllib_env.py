@@ -146,6 +146,10 @@ class FactoryMultiAgentEnv(MultiAgentEnv):
         frame = self.episode.frame
         observations, infos = {}, {}
         contexts = (frame.request,) if frame.request is not None else frame.waiting
+        shared_critic = None
+        reuse_critic = getattr(
+            self.episode.components.critic, "subject_independent", False
+        )
         for context in contexts:
             agent = self.agent_id(context)
             codec = self.codecs[self.agent_groups[agent]]
@@ -162,12 +166,21 @@ class FactoryMultiAgentEnv(MultiAgentEnv):
                     context.stage,
                     frame.truncated,
                 )
-                obs["critic"] = np.asarray(
-                    self.episode.components.value_input(
-                        self.episode.protocol, value_context
-                    ),
-                    dtype=np.float32,
-                )
+                if shared_critic is None:
+                    critic = np.asarray(
+                        self.episode.components.value_input(
+                            self.episode.protocol, value_context
+                        ),
+                        dtype=np.float32,
+                    )
+                    if reuse_critic:
+                        # Only this observation frame: same-tick actions may
+                        # change public state before the next call.
+                        shared_critic = critic
+                else:
+                    critic = shared_critic
+                # Keep observations independently writable for RLlib consumers.
+                obs["critic"] = critic.copy()
             observations[agent] = obs
             infos[agent] = {
                 "physical_tick": frame.tick,

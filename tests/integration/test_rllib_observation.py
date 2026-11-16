@@ -319,3 +319,94 @@ def verify_official_modules(codecs, examples, social):
             values,
             ppo.compute_values({Columns.OBS: {**ppo_obs, "critic": torch.ones(2, 48)}}),
         )
+
+
+@pytest.mark.parametrize("tick_limit", [12, 1000])
+@pytest.mark.parametrize("subject_dependent", [False, True])
+def test_critic_reuse_preserves_every_frame_and_observation_ownership(
+    tick_limit, subject_dependent
+):
+    from smartsom.learning.rllib_env import FactoryMultiAgentEnv
+
+    root = Path(__file__).resolve().parents[2]
+    options = BaseAlgorithm.model_validate(
+        yaml.safe_load((root / "configs/algorithms/rllib-base-ppo.yaml").read_text())
+    )
+    scenario = replace(sim_with(n=2).scenario, tick_limit=tick_limit)
+    envs = [
+        FactoryMultiAgentEnv(
+            {"scenario": scenario, "options": options, "algorithm": "ppo"}
+        )
+        for _ in range(2)
+    ]
+    calls = [0, 0]
+
+    def counted(critic, index):
+        def observe(facts, context):
+            calls[index] += 1
+            values = critic(facts, context)
+            if subject_dependent:
+                # Explicit custom component with context-dependent output.
+                values = (float(sum(map(ord, context.owner))), *values[1:])
+            return values
+
+        if index == 1 and not subject_dependent:
+            observe.subject_independent = True
+        return observe
+
+    def equal(left, right):
+        if isinstance(left, dict):
+            assert left.keys() == right.keys()
+            for key in left:
+                equal(left[key], right[key])
+        elif isinstance(left, (tuple, list)):
+            assert len(left) == len(right)
+            for a, b in zip(left, right, strict=True):
+                equal(a, b)
+        else:
+            np.testing.assert_array_equal(left, right)
+
+    multi_waits = same_tick_changes = 0
+    try:
+        rows = [env.reset(seed=101) for env in envs]
+        for index, env in enumerate(envs):
+            env.episode.components.critic = counted(
+                env.episode.components.critic, index
+            )
+        for _ in range(3000):
+            equal(*rows)
+            obs = rows[0][0]
+            candidate = rows[1][0]
+            if len(candidate) > 1:
+                multi_waits += 1
+                arrays = [value["critic"] for value in candidate.values()]
+                saved = [a.copy() for a in arrays]
+                arrays[0][:] = -12345
+                for actual, expected in zip(arrays[1:], saved[1:], strict=True):
+                    np.testing.assert_array_equal(actual, expected)
+                arrays[0][:] = saved[0]
+            if envs[0].episode.frame.terminated or envs[0].episode.frame.truncated:
+                break
+            actions = {
+                agent: int(np.flatnonzero(value["action_mask"])[0])
+                for agent, value in obs.items()
+            }
+            previous_tick = envs[0].episode.sim.tick
+            rows = [env.step(actions) for env in envs]
+            if envs[0].episode.sim.tick == previous_tick:
+                same_tick_changes += 1
+            # Returned observations remain detached from subsequent frames.
+            equal(obs, candidate)
+        else:
+            pytest.fail("representative factory episode did not reach its boundary")
+        assert multi_waits > 0 and same_tick_changes > 0
+        if subject_dependent:
+            assert calls[0] == calls[1]
+        else:
+            assert calls[0] > calls[1] > 0
+        assert envs[0].episode.frame.truncated == (tick_limit == 12)
+        # A second reset must build fresh features and match the original reset.
+        equal(envs[0].reset(seed=101), envs[1].reset(seed=101))
+    finally:
+        for env in envs:
+            env.close()
