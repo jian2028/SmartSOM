@@ -67,7 +67,16 @@ world/condition and serial worker are diagnostic choices, not an estimate of the
 whole multi-condition/multi-worker campaign. Tracking, checkpoint I/O, Tune and
 fixed-panel orchestration are excluded explicitly.
 
-`phases` wraps local sampling, inference, learner update, decision/observation,
+For a historical-size diagnostic, `--world /absolute/scenario.json --iterations 0`
+reads an exact frozen physical snapshot through the normal snapshot decoder.
+It overrides world generation only and records the override and canonical world
+hash; algorithm/model inputs still come from `--experiment`. It does not load or
+translate a legacy policy. Historical trained-policy timings and current fresh
+policies are context, not a controlled framework-regression comparison. Check
+complete delivery and truncation before describing a result as completion time.
+
+`phases` wraps local sampling, official connector pipelines, multi-agent episode
+recording/conversion, inference, learner update, decision/observation,
 traffic and physical stepping. Use exclusive phase seconds for disjoint totals;
 inclusive times are nested and must not be summed. Compare each method's complete
 non-timing results and iteration workload with its own uninstrumented run, and

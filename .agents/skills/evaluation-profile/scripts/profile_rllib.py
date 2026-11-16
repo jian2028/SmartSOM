@@ -28,9 +28,11 @@ def digest_tree(root):
 
 def install_phases(algorithm):
     from phase_clock import PhaseClock
+    from ray.rllib.connectors.connector_pipeline_v2 import ConnectorPipelineV2
     from ray.rllib.core.learner.learner import Learner
     from ray.rllib.core.learner.torch.torch_learner import TorchLearner
     from ray.rllib.core.rl_module.rl_module import RLModule
+    from ray.rllib.env.multi_agent_episode import MultiAgentEpisode
     from ray.rllib.policy.sample_batch import SampleBatch
 
     from smartsom.algorithms.training import TrainingComponents
@@ -40,12 +42,17 @@ def install_phases(algorithm):
     from smartsom.learning.factory_episode import FactoryEpisode
     from smartsom.learning.rllib_central_env import CentralFactoryEnv
     from smartsom.learning.rllib_env import FactoryMultiAgentEnv
+    from smartsom.learning.rllib_models import CandidateHead, LocalDuelingValue
     from smartsom.learning.rllib_observation import V2ObservationCodec
+    from smartsom.representations.v2._network_torch import Network
     from smartsom.traffic.rule_mover import SharedMover
 
     clock = PhaseClock()
     for owner, method, label in (
         (algorithm.env_runner, "sample", "sampling_framework"),
+        (ConnectorPipelineV2, "__call__", "connector_pipeline"),
+        (MultiAgentEpisode, "add_env_step", "episode_recording"),
+        (MultiAgentEpisode, "to_numpy", "episode_to_numpy"),
         (algorithm.learner_group, "update", "learner_update"),
         (SampleBatch, "shuffle", "learner_batch_shuffle"),
         (RLModule, "forward_train", "learner_network_forward"),
@@ -54,6 +61,9 @@ def install_phases(algorithm):
         (TorchLearner, "apply_gradients", "learner_optimizer"),
         (algorithm.env_runner.module, "forward_exploration", "policy_inference"),
         (algorithm.env_runner.module, "forward_inference", "policy_inference"),
+        (CandidateHead, "forward", "candidate_head"),
+        (Network, "actor", "actor_network"),
+        (LocalDuelingValue, "forward", "dueling_value"),
         (FactoryEpisode, "act", "factory_action_and_reward"),
         (FactoryEpisode, "wait", "factory_action_and_reward"),
         (FactoryEpisode, "_next", "decision_protocol"),
@@ -88,6 +98,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--experiment", required=True, type=Path)
+    parser.add_argument(
+        "--world",
+        type=Path,
+        help="Use a frozen ProductionScenario JSON instead of generating a world; diagnostic sampling only",
+    )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--mode", choices=("baseline", "phases"), default="baseline")
     parser.add_argument("--episodes", type=int, default=1)
@@ -111,6 +126,10 @@ def main():
         parser.error("iterations must be nonnegative")
     if args.sample_steps is not None and args.sample_steps < 1:
         parser.error("sample-steps must be positive")
+    if args.world is not None and args.iterations != 0:
+        parser.error(
+            "--world requires --iterations 0; historical worlds are sampling diagnostics"
+        )
     source = args.source.resolve()
     output = args.output.resolve()
     if output.is_relative_to(source):
@@ -143,12 +162,17 @@ def main():
         parser.error("requires an official RLlib learning recipe")
     if not ex.drain_frozen or ex.drain_ticks is None:
         parser.error("requires a frozen scientific drain; profiling never calibrates")
-    scenario = generate_scenario(
-        *ex.inputs_for(args.condition, factory, workload),
-        args.seed,
-        args.condition,
-        ex.drain_ticks,
-    )
+    if args.world is None:
+        scenario = generate_scenario(
+            *ex.inputs_for(args.condition, factory, workload),
+            args.seed,
+            args.condition,
+            ex.drain_ticks,
+        )
+    else:
+        from smartsom.config.scenario_snapshot import scenario_from_snapshot
+
+        scenario = scenario_from_snapshot(json.loads(args.world.read_text()))
     world = primitive(scenario)
     world_hash = hashlib.sha256(json.dumps(world, sort_keys=True).encode()).hexdigest()
     write(output / "world.json", world)
@@ -208,6 +232,7 @@ def main():
             Path(__file__).with_name("phase_clock.py").read_bytes()
         ).hexdigest(),
         "world_sha256": world_hash,
+        "frozen_world_override": str(args.world.resolve()) if args.world else None,
         "seed": args.seed,
         "condition": args.condition,
         "dependencies": {
