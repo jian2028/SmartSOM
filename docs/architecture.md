@@ -20,6 +20,12 @@ queries return detached immutable rows; full facility snapshots and static
 topology are available when requested. Dynamic data are fresh for each decision,
 including same-tick changes. A provider cannot be used to query later state.
 
+V2 service rules reuse the same job-to-vehicle pairing within one request's
+derived-facts scope. Input/post acceptance candidates share their owner's frozen
+social supply within that observation callback. Neither reuse spans a decision
+or a physical advance; candidate order, tie-breaking and numerical fields remain
+unchanged.
+
 Observation components construct statistics and fixed input data; network
 components construct learned encodings and masked action scores. BaseInputs holds
 Base context, four sets and candidate vectors; implicit SL appends peer relations

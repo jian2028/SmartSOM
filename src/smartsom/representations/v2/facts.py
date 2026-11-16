@@ -150,6 +150,14 @@ class View:
         return reachable, feasible, terminal
 
     @request_cache
+    def service_pairs(self, candidates):
+        """All service rules in this callback use the same legal pair set."""
+        return tuple(
+            self.pair(job, candidates)[0]
+            for job in sorted({candidate.action[0] for candidate in candidates})
+        )
+
+    @request_cache
     def pair(self, job, candidates):
         """Fixed closest downstream vehicle, never a learned vehicle selector."""
         f = self.f

@@ -116,10 +116,7 @@ def choose(facts, request, candidates, rule):
     v = view(facts)
     if request.group in ("post", "input") and request.stage == "service":
         facts.component_cache["smartsom.v2.service-candidates"] = candidates
-        candidates = tuple(
-            v.pair(job, candidates)[0]
-            for job in sorted({c.action[0] for c in candidates})
-        )
+        candidates = v.service_pairs(candidates)
     if rule.startswith("EVR_"):
         members = (
             ("NPF", "LWF", "EDSF", "HPOF", "LPCL")

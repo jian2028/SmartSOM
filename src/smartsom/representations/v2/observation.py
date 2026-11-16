@@ -278,6 +278,7 @@ def create_observation(*, social_enabled=None, social=None):
             "smartsom.v2.service-candidates", request.candidates
         )
         rows, modes, relations = [], [], []
+        shared_supply = None
         for candidate in request.candidates:
             rule = request.rule_audit["rules"][candidate.identity]["rule"]
             prefix = "v2_"
@@ -295,9 +296,17 @@ def create_observation(*, social_enabled=None, social=None):
                 else ()
             )
             if enabled:
-                relations.append(
-                    freeze(social_relations(v, request, candidate, ordered=ordered))
-                )
+                # Supply belongs to this owner, not the candidate vehicle. Reuse
+                # only the immutable result inside this unchanged callback.
+                if shared_supply is None:
+                    relation_data = freeze(
+                        social_relations(v, request, candidate, ordered=ordered)
+                    )
+                    if request.group in ("input", "post") and request.stage == "accept":
+                        shared_supply = relation_data
+                else:
+                    relation_data = shared_supply
+                relations.append(relation_data)
         return {
             "context": context(v, request),
             "candidates": tuple(rows),

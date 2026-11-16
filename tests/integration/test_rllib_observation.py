@@ -209,6 +209,30 @@ def test_real_observations_and_waits_preserve_payload(fusion):
         frame = episode.frame
         if frame.request is not None:
             request = frame.request
+            if fusion != "base":
+                from smartsom.domain.public_facts import freeze
+                from smartsom.engine.decision_facts import DecisionFacts
+                from smartsom.representations.v2.facts import view
+                from smartsom.representations.v2.observation import social_relations
+
+                # Independently rebuild every candidate's relation from fresh
+                # public state, including successive decisions at the same tick.
+                with (
+                    episode.protocol.local_facts(),
+                    DecisionFacts(episode.protocol, request) as facts,
+                ):
+                    expected = tuple(
+                        freeze(
+                            social_relations(
+                                view(facts),
+                                request,
+                                candidate,
+                                ordered=fusion == "concat",
+                            )
+                        )
+                        for candidate in request.candidates
+                    )
+                assert request.inputs["social"] == expected
             encoder = codec(request)
             obs = encoder.encode(request)
             if (
