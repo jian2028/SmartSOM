@@ -81,6 +81,69 @@ def test_initialization_timestamp_survives_training_metric_reduction():
         assert result["algorithm_initialized_unix"] == expected
 
 
+@pytest.mark.parametrize("multi_agent", [False, True])
+@pytest.mark.parametrize("evaluation", [False, True])
+def test_physical_tick_metrics_survive_official_episode_cuts(multi_agent, evaluation):
+    from types import SimpleNamespace
+
+    from ray.rllib.env.multi_agent_episode import MultiAgentEpisode
+    from ray.rllib.env.single_agent_episode import SingleAgentEpisode
+    from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
+
+    from smartsom.learning.rllib_metrics import FactoryProgress
+
+    episode = MultiAgentEpisode() if multi_agent else SingleAgentEpisode()
+    if multi_agent:
+        episode.add_env_reset(observations={"a": 0}, infos={"a": {"physical_tick": 7}})
+    else:
+        episode.add_env_reset(observation=0, infos={"physical_tick": 7})
+    callback, metrics = FactoryProgress(), MetricsLogger(root=True)
+    runner = SimpleNamespace(config=SimpleNamespace(in_evaluation=evaluation))
+    callback.on_episode_start(
+        episode=episode, env_runner=runner, metrics_logger=metrics
+    )
+    previous, known = {"a"}, {"a"}
+    for index, tick in enumerate((7, 11, 11, 25)):
+        done = index == 3
+        if multi_agent:
+            observed = ({"a"}, {"b"}, {"b"}, {"a", "b"})[index]
+            episode.add_env_step(
+                observations=dict.fromkeys(observed, index),
+                actions=dict.fromkeys(previous, 0),
+                rewards=dict.fromkeys(known, 0.0),
+                infos={a: {"physical_tick": tick} for a in observed},
+                terminateds={"__all__": done},
+                truncateds={"__all__": False},
+            )
+            previous = observed
+            known |= observed
+        else:
+            episode.add_env_step(
+                observation=index,
+                action=0,
+                reward=0.0,
+                infos={"physical_tick": tick},
+                terminated=done,
+            )
+        callback.on_episode_step(
+            episode=episode, env_runner=runner, metrics_logger=metrics
+        )
+        if not evaluation:
+            # Includes the initial seven ticks, zero-time decisions and jumps.
+            assert metrics.peek("smartsom_physical_ticks") == tick
+        if not done:
+            episode = episode.cut(len_lookback_buffer=1)
+            episode = type(episode).from_state(episode.get_state())
+    callback.on_episode_end(episode=episode, env_runner=runner, metrics_logger=metrics)
+    if evaluation:
+        assert not episode.custom_data
+        with pytest.raises(KeyError):
+            metrics.peek("smartsom_physical_ticks")
+    else:
+        assert metrics.peek("smartsom_physical_ticks") == 25
+        assert metrics.peek("smartsom_episodes") == 1
+
+
 def test_training_worlds_follow_official_reset_seed_and_preserve_fixed_evaluation():
     from smartsom.config.base_diagnostic import generate_scenario, load_inputs
     from smartsom.learning.rllib_worlds import TrainingWorlds

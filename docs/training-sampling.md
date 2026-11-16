@@ -93,3 +93,25 @@ Historical controls and exact-wave tests are preserved in ADR0082/0083 and the
 [test migration archive](../archive/rllib-transition-tests/README.md). They do not
 specify the new framework. Representative performance evidence is reported
 separately from correctness tests and scientific conclusions.
+
+## Historical performance optimizations
+
+Historical native timings are not RLlib baselines. The compatibility audit uses
+the actual final PR implementations, including rejected and superseded variants:
+
+| History | Current runtime treatment |
+| --- | --- |
+| PR14 transaction/replay storage; PR27 copy/projection paths | Old transaction and registered-observation paths retired in PR31, before this migration. RLlib owns current episode/replay storage; no second replay system is restored. |
+| PR22 compact inputs and PR27 A | DQN retains actor/Q inputs without PPO critic padding. PPO retains its separate public critic input. |
+| PR27 B/J deferred value and branch splitting | Official PPO `compute_values` and inference-only modules own value execution; native rollout/update scheduling is not copied. |
+| PR27 I and PR36 public facts, work estimates, routing and invariant reuse | Applicable simulator caches remain in the shared core. Same-tick changes, ordered arithmetic and extension behavior remain covered. |
+| PR27 E/L model-package and continuation serialization | Official checkpoints replace native package caching/hashing; checkpoint frequency and replay persistence remain unchanged. |
+| PR27 F/K array and diagnostic caches | Previously rejected/low-yield ideas are not enabled wholesale. Repeated progress lookup is tested using official episode `custom_data`, which survives public cut/state operations; committed counters remain in `MetricsLogger`. |
+| PR36 social tensor batching | Tested on current V2 supply packing; no gain in the representative short comparison, so the extra implementation is excluded. |
+| PR36/PR40 singleton inference shortcuts | Native-only eligibility and RNG rules are not applied to official PPO/DQN exploration or bootstrap. No learning transition is removed. |
+| PR36 parallel evaluation | Official resident evaluation EnvRunners replace the native spawn pool. |
+| PR42 flat E1a scoring and snapshot reuse | Already present in the Morris adapter and shared core. Width buckets were superseded within PR42 and are not restored. |
+
+Performance candidates are measured separately on frozen sources before combined
+acceptance. A faster short query or sampling window does not establish full-episode
+or training throughput; rejected patches and measurements remain local evidence.

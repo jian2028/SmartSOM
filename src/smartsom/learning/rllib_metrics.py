@@ -30,17 +30,21 @@ class FactoryProgress(RLlibCallback):
 
     def on_episode_start(self, *, episode, env_runner, metrics_logger, **kwargs):
         if not env_runner.config.in_evaluation:
-            metrics_logger.log_value(
-                "smartsom_physical_ticks", _tick(episode, -1), reduce="sum"
-            )
+            tick = _tick(episode, -1)
+            episode.custom_data["smartsom_previous_physical_tick"] = tick
+            metrics_logger.log_value("smartsom_physical_ticks", tick, reduce="sum")
 
     def on_episode_step(self, *, episode, env_runner, metrics_logger, **kwargs):
         if not env_runner.config.in_evaluation:
+            tick = _tick(episode, -1)
             metrics_logger.log_value(
                 "smartsom_physical_ticks",
-                _tick(episode, -1) - _tick(episode, -2),
+                tick - episode.custom_data["smartsom_previous_physical_tick"],
                 reduce="sum",
             )
+            # Official episode custom_data survives fragment cuts and state
+            # roundtrips; avoid querying the same prior info frame again.
+            episode.custom_data["smartsom_previous_physical_tick"] = tick
 
     def on_episode_end(self, *, episode, env_runner, metrics_logger, **kwargs):
         if not env_runner.config.in_evaluation:
