@@ -53,13 +53,21 @@ def test_wait_frames_preserve_complete_physics_and_semantic_decision_order(mode,
     episode = FactoryEpisode(scenario, settings, action_seed=101)
     policy = build_policy(settings, 101)
     actual, total = [], 0.0
+    acted, seen = set(), set()
+    empty_boundaries = 0
     while not (episode.frame.terminated or episode.frame.truncated):
         frame = episode.frame
         total += frame.team_reward
         if frame.request is not None:
+            key = episode.subject_key(frame.request)
+            acted.add(key)
+            seen.add(key)
             episode.act(choose(policy, frame.request, actual).identity)
         else:
             assert all(row.tick == episode.sim.tick for row in frame.waiting)
+            assert {episode.subject_key(row) for row in frame.waiting} == acted
+            empty_boundaries += not frame.waiting
+            acted.clear()
             assert episode._generator is None
             episode.wait()
     total += episode.frame.team_reward
@@ -69,12 +77,14 @@ def test_wait_frames_preserve_complete_physics_and_semantic_decision_order(mode,
     assert episode.sim.total_reward == baseline.total_reward
     assert all(row.tick == episode.sim.tick for row in episode.frame.waiting)
     assert episode.frame.waiting  # Real bootstrap contexts, also at truncation.
+    assert {episode.subject_key(row) for row in episode.frame.waiting} == seen
     report = episode.metrics()
     assert total == pytest.approx(report["learning_return"])
     assert total == pytest.approx(-report["observed_cost"])
     assert episode.frame.truncated == (limit == 3)
     assert report["truncated"] == episode.frame.truncated
     if limit == 1000:
+        assert empty_boundaries > 0
         assert total == pytest.approx(-report["joint_cost"])
     with pytest.raises(ValueError):
         episode.wait()

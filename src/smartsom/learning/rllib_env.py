@@ -279,11 +279,25 @@ class FactoryMultiAgentEnv(MultiAgentEnv):
                 raise ValueError("waiting agents must select their sole WAIT action")
             self.episode.wait()
         frame = self.episode.frame
-        rewards = dict.fromkeys(self.started, frame.team_reward)
+        reward = frame.team_reward
+        # No decision is due during these physical intervals. Keep all physics
+        # and costs, while RLlib holds each agent's pending action until its next
+        # production observation or the final bootstrap observation.
+        while (
+            frame.request is None
+            and not frame.waiting
+            and not (frame.terminated or frame.truncated)
+        ):
+            frame = self.episode.wait()
+            reward += frame.team_reward
+        rewards = dict.fromkeys(self.started, reward)
         observations, infos = self._observations()
         terminated = {agent: frame.terminated for agent in self.started}
-        truncated = {agent: frame.truncated for agent in self.started}
-        terminated["__all__"], truncated["__all__"] = frame.terminated, frame.truncated
+        # The drain truncates the whole factory. Ray propagates __all__ to every
+        # agent; listing every agent as done also triggers its mixed-done
+        # termination inference, incorrectly disabling bootstrap at a cutoff.
+        truncated = {"__all__": frame.truncated}
+        terminated["__all__"] = frame.terminated
         return observations, rewards, terminated, truncated, infos
 
     def close(self):

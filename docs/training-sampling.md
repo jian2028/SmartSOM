@@ -31,6 +31,13 @@ RLlib owns sample collection and updates; there is no SmartSOM synchronous wave,
 physical-time discount or update-credit scheduler. Omitted settings use the pinned
 framework defaults, recorded in the resolved configuration.
 
+Base/SL sampling is event-driven: a production decision opens one learned WAIT
+at the end of its negotiation interval. Continuing to wait does not generate a
+new agent step at every physical tick. Physics and team costs still advance over
+every interval, and final observations retain valid bootstrap actions for all
+started agents. This reduces trajectory storage but changes official decision-step
+discounting and sample counts; see [ADR0102](decisions/0102-event-driven-learning-waits.md).
+
 Training and evaluation are sequential; evaluation cases run concurrently on
 resident evaluation EnvRunners. All resident components, including idle workers,
 count toward the Tune request. Resource declarations control admission, not OS

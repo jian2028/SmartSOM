@@ -14,6 +14,122 @@ from smartsom.representations.v2.network import pack
 from tests.unit.test_base_reservations import sim_with
 
 
+@pytest.mark.parametrize("limit", [3, 1000])
+@pytest.mark.parametrize("fragment_length", [1, 7])
+def test_event_waits_preserve_cost_and_official_pending_agent_rewards(
+    limit, fragment_length
+):
+    from copy import deepcopy
+
+    import gymnasium as gym
+    from ray.rllib.env.multi_agent_env_runner import MultiAgentEnvRunner
+    from ray.rllib.env.multi_agent_episode import MultiAgentEpisode
+
+    from smartsom.learning.rllib_dqn import (
+        RestorableMultiAgentPrioritizedEpisodeReplayBuffer,
+    )
+    from smartsom.learning.rllib_env import FactoryMultiAgentEnv
+    from smartsom.rewards.normalized_task import cost_snapshot
+    from tests.integration.test_rllib_dqn_checkpoint import assert_state_equal
+
+    root = Path(__file__).resolve().parents[2]
+    options = BaseAlgorithm.model_validate(
+        yaml.safe_load((root / "configs/algorithms/rllib-base-dqn.yaml").read_text())
+    )
+    env = FactoryMultiAgentEnv(
+        {
+            "scenario": replace(sim_with(n=2).scenario, tick_limit=limit),
+            "options": options,
+            "algorithm": "dqn",
+        }
+    )
+    try:
+        observations, infos = env.reset(seed=101)
+        trajectory = MultiAgentEpisode(
+            observation_space=gym.spaces.Dict(env.observation_spaces),
+            action_space=gym.spaces.Dict(env.action_spaces),
+        )
+        trajectory.add_env_reset(observations=observations, infos=infos)
+        fragment = deepcopy(trajectory)
+        replay = RestorableMultiAgentPrioritizedEpisodeReplayBuffer(capacity=10000)
+        totals, jumps = {}, []
+        observed_reward = 0.0
+        for _ in range(10000):
+            started = set(env.started)
+            before = cost_snapshot(env.episode.sim)
+            tick = env.episode.sim.tick
+            actions = {
+                agent: int(np.flatnonzero(obs["action_mask"])[0])
+                for agent, obs in observations.items()
+            }
+            observations, rewards, terminated, truncated, infos = env.step(actions)
+            delta = cost_snapshot(env.episode.sim).reward_since(before)
+            assert set(rewards) == started
+            assert all(value == pytest.approx(delta) for value in rewards.values())
+            observed_reward += delta
+            jumps.append(env.episode.sim.tick - tick)
+            for agent, value in rewards.items():
+                totals[agent] = totals.get(agent, 0.0) + value
+            transition = dict(
+                observations=observations,
+                actions=actions,
+                rewards=rewards,
+                infos=infos,
+                terminateds=terminated,
+                truncateds=truncated,
+                extra_model_outputs={agent: {} for agent in actions},
+            )
+            trajectory.add_env_step(**transition)
+            fragment.add_env_step(**transition)
+            done = terminated["__all__"] or truncated["__all__"]
+            if trajectory.env_t % fragment_length == 0 or done:
+                successor = None if done else fragment.cut(len_lookback_buffer=1)
+                # Match the official EnvRunner's fragment admission preprocessing.
+                MultiAgentEnvRunner._prune_zero_len_sa_episodes(fragment)
+                replay.add(fragment)
+                fragment = successor
+            if done:
+                break
+        else:
+            pytest.fail("event-driven episode did not reach its horizon")
+        assert truncated["__all__"] == (limit == 3)
+        assert trajectory.is_terminated == (limit == 1000)
+        assert trajectory.is_truncated == (limit == 3)
+        assert set(observations) == set(totals)
+        assert all(
+            np.flatnonzero(obs["action_mask"]).tolist() == [0]
+            for obs in observations.values()
+        )
+        for agent, total in totals.items():
+            episode = trajectory.agent_episodes[agent]
+            assert sum(episode.get_rewards()) == pytest.approx(total)
+            assert episode.is_terminated == (limit == 1000)
+            assert episode.is_truncated == (limit == 3)
+        restored = RestorableMultiAgentPrioritizedEpisodeReplayBuffer(capacity=10000)
+        restored.set_state(replay.get_state())
+        for buffer in (replay, restored):
+            combined = buffer.episodes[0]
+            assert combined.is_terminated == (limit == 1000)
+            assert combined.is_truncated == (limit == 3)
+            for agent, expected in trajectory.agent_episodes.items():
+                actual = combined.agent_episodes[agent]
+                assert actual.is_terminated == expected.is_terminated
+                assert actual.is_truncated == expected.is_truncated
+                for method in ("get_rewards", "get_actions", "get_observations"):
+                    assert_state_equal(
+                        getattr(actual, method)(), getattr(expected, method)()
+                    )
+        assert observed_reward == pytest.approx(env.episode.team_return)
+        if limit == 1000:
+            # Real physics intervals coalesce, costs do not vanish.
+            assert max(jumps) > 1
+            assert observed_reward == pytest.approx(
+                -env.episode.metrics()["joint_cost"]
+            )
+    finally:
+        env.close()
+
+
 def test_rule_action_spaces_do_not_scale_with_physical_job_pairs():
     from smartsom.learning.rllib_env import FactoryMultiAgentEnv
 

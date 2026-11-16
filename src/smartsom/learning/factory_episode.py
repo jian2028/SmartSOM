@@ -62,10 +62,14 @@ class FactoryEpisode:
         stage = request.stage if request.group in policy.split_stages else ""
         return request.group, request.owner, stage
 
-    def _waiting(self):
+    def _waiting(self, *, final=False):
+        # A production action opens one waiting transition at its physical
+        # boundary. Continuing to wait does not create another agent decision.
+        pending = {self.subject_key(action) for action in self.actions}
         return tuple(
             LearningContext(self.sim.tick, row.group, row.owner, row.stage)
-            for row in self.subjects.values()
+            for key, row in self.subjects.items()
+            if final or key in pending
         )
 
     def _next(self, action=None, *, send=False, reward=0.0):
@@ -127,7 +131,7 @@ class FactoryEpisode:
             self.frame = FactoryFrame(
                 self.sim.tick,
                 None,
-                self._waiting(),
+                self._waiting(final=True),
                 reward,
                 terminated=complete,
                 truncated=not complete,
