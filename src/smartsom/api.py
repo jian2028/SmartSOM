@@ -37,34 +37,34 @@ def resume(
     interactive=False,
 ):
     """Resume matching current frozen code, inputs and continuation state."""
-    from smartsom.experiments import control, runtime_control
+    from smartsom.experiments import control
     from smartsom.experiments.catalog import require_current, resolve_run
     from smartsom.experiments.launch import update_execution
 
     root = resolve_run(source, roots)
-    from smartsom.experiments.batch_retry import check_root_recovery
-
-    check_root_recovery(root)
     require_current(root)
+    if (root / "search.json").is_file():
+        from smartsom.config.search import reject_failed_retry
+
+        reject_failed_retry(retry_failed)
     owner = control.read(root)
     if (
         owner
         and owner.get("status") in control.ACTIVE
         and control.alive(owner["owner"], control.processes())
     ):
-        if profile or operations or background is not None:
-            raise ConfigurationError(
-                "live resume only releases pause; change live resources through configure"
-            )
-        if runtime_control.snapshot(root):
-            return runtime_control.submit(root, "resume")
-        control.clear_pause(root)
-        return {"directory": str(root), "status": "resume_requested"}
+        raise ConfigurationError(
+            "run is still active; wait for whole-run pause to finish before resume"
+        )
     plan_path = root / "plan.json"
     schema = (
         json.loads(plan_path.read_text()).get("schema") if plan_path.exists() else None
     )
-    if schema == "smartsom.reservation-plan/v1" and not retry_failed:
+    if (
+        schema == "smartsom.reservation-plan/v1"
+        and not retry_failed
+        and not (root / "search.json").is_file()
+    ):
         from smartsom.experiments.catalog import read_json
 
         if any(

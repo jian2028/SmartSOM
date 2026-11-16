@@ -5,16 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from smartsom.experiments.tuning_resources import (
+from smartsom.telemetry.system_resources import (
     GIB,
-    ExecutionProfile,
-    GPUInfo,
-    ProcessUsage,
-    ResourceBroker,
     ResourceMonitor,
-    ResourceRequest,
     ResourceSnapshot,
-    ResourceUnavailable,
 )
 
 
@@ -201,51 +195,6 @@ def test_unknown_mig_and_gpu_timeout_are_missing_observations(tmp_path):
     assert "nvidia GPU metrics unavailable" in monitor.snapshot().unavailable
 
 
-def test_office_and_throughput_reserves_and_owned_rss_count_once():
-    observation = snapshot(
-        memory_available=10 * GIB,
-        processes=(ProcessUsage(1, "ours", 2.0, 4 * GIB, True),),
-    )
-    office = ResourceBroker(mode="balanced")
-    throughput = ResourceBroker(mode="performance")
-    assert office.capacity(observation).cpus == 12.8
-    assert office.capacity(observation).memory == 14 * GIB - int(32 * GIB * 0.2)
-    assert throughput.capacity(observation).cpus == 15.0
-    assert throughput.capacity(observation).memory == 14 * GIB - int(32 * GIB * 0.1)
-
-
-def test_all_lease_lifecycle_states_hold_capacity_until_release():
-    broker = ResourceBroker(mode="performance")
-    observation = snapshot()
-    request = ResourceRequest(7, 2 * GIB)
-    broker.reserve("one", request, snapshot=observation)
-    broker.reserve("two", request, snapshot=observation, state="staged")
-    assert not broker.admit(ResourceRequest(2, GIB), observation).allowed
-    for state in ("running", "stopping"):
-        broker.transition("one", state, pids=(101,))
-        assert not broker.admit(ResourceRequest(2, GIB), observation).allowed
-    broker.release("one")
-    assert broker.admit(ResourceRequest(2, GIB), observation).allowed
-    with pytest.raises(ValueError, match="already exists"):
-        broker.reserve("two", request, snapshot=observation)
-
-
-def test_memory_peak_margin_and_explicit_gpu_budget():
-    broker = ResourceBroker(mode="performance")
-    observation = snapshot(
-        memory_total=16 * GIB,
-        memory_available=4 * GIB,
-        gpus=(GPUInfo("0", "H20", 16 * GIB, 4 * GIB),),
-    )
-    assert broker.admit(ResourceRequest(1, GIB, "0", 3 * GIB), observation).allowed
-    assert not broker.admit(ResourceRequest(1, GIB, "0", 4 * GIB), observation).allowed
-    assert not broker.admit(ResourceRequest(1, GIB, "1", GIB), observation).allowed
-    assert not broker.admit(ResourceRequest(1, 2 * GIB), observation).allowed
-    with pytest.raises(ResourceUnavailable):
-        broker.reserve("too-large", ResourceRequest(1, 2 * GIB), snapshot=observation)
-    assert not broker.leases
-
-
 def test_affinity_load_excludes_busy_processors_outside_the_allocation(tmp_path):
     class OtherAllocationBusy(Psutil):
         @staticmethod
@@ -273,28 +222,6 @@ def test_v1_quota_and_memory_limits_are_read_in_bytes(tmp_path):
     ).snapshot()
     assert result.cpus == 1.5
     assert result.memory_total == 8 * GIB and result.memory_available == 5 * GIB
-
-
-def test_broker_excludes_lease_processes_when_observing_background_load():
-    calls = []
-
-    class Monitor:
-        def snapshot(self, exclude_pids=()):
-            calls.append(exclude_pids)
-            return snapshot()
-
-    broker = ResourceBroker(Monitor(), mode="performance")
-    broker.reserve("one", ResourceRequest(1, GIB), snapshot=snapshot(), pids=(200,))
-    broker.snapshot(exclude_pids=(100,))
-    assert set(calls[-1]) == {100, 200}
-
-
-@pytest.mark.parametrize(
-    "profile", [(0, 1, "cpu"), (1, True, "cpu"), (1, 1, "mps"), (1, 1, "cuda:-1")]
-)
-def test_invalid_execution_profiles(profile):
-    with pytest.raises(ValueError):
-        ExecutionProfile(*profile)
 
 
 @pytest.mark.parametrize("wall_adjustment", [0, -1.5, 20])
@@ -371,26 +298,9 @@ def test_newborn_owned_cpu_is_measured_in_aggregate_window_without_weakening_cap
     assert observed.observations["owned_cpu_cores"] == 1
     assert observed.observations["newborn_process_count"] == 1
     assert observed.external_cpu_load == 25
-    assert ResourceBroker(mode="performance").capacity(observed).cpus == 2
     # A genuinely new external process's CPU is never deducted as our load.
     children[:] = [TimedProcess(99, born=102.5, total=2)]
     clock[0] = wall[0] = 104.0
     external = monitor.snapshot(exclude_pids=(10,))
     assert external.observations["owned_cpu_cores"] == 0
     assert external.external_cpu_load == 50
-    assert ResourceBroker(mode="performance").capacity(external).cpus == 1
-
-
-def test_logical_contribution_budget_clamps_admission_without_changing_host_facts():
-    broker = ResourceBroker(mode="performance")
-    observed = snapshot()
-    physical = broker.capacity(observed)
-    broker.logical_budget = {"cpus": 2.5, "memory": 3 * GIB}
-    limited = broker.capacity(observed)
-    assert limited.cpus == 2.5
-    assert limited.memory == 3 * GIB
-    assert observed.cpus == 16
-    assert observed.memory_available == 24 * GIB
-    assert not broker.admit(ResourceRequest(3, GIB), observed).allowed
-    broker.logical_budget = {"cpus": 100, "memory": 100 * GIB}
-    assert broker.capacity(observed) == physical

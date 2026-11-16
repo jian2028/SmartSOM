@@ -1,8 +1,4 @@
-"""Base preparation adapter for the existing directory batch/NativeScheduler.
-
-This module freezes inputs only. Execution, admission, failure propagation and
-runtime controls remain owned by author_batch and its existing workers.
-"""
+"""Freeze scientific directory inputs for the unified Tune execution."""
 
 import json
 from dataclasses import replace
@@ -18,7 +14,6 @@ from smartsom.experiments.evidence import source_identity, write_json
 def compile_files(
     directory,
     paths,
-    calibration_overrides,
     *,
     execution_selection=None,
     resume_missing=False,
@@ -35,15 +30,19 @@ def compile_files(
     from smartsom.config.launch import scientific_identity
     from smartsom.experiments.author_batch import DirectoryPlan
 
-    if any(value not in (None, "off", 0) for value in calibration_overrides.values()):
-        raise ConfigurationError(
-            "Base directory execution uses per-Experiment calibration evidence"
-        )
     incremental = execution_selection is not None
     canonical = all(location(p) is not None for p in paths)
-    # Named files are research entries too; retain canonical output paths.
+    members = list(compile_members(paths, overrides))
+    # Every training seed gets a distinct frozen trial, including standalone files.
     research = (
-        canonical or incremental or any(p.name != "experiment.yaml" for p in paths)
+        canonical
+        or incremental
+        or any(p.name != "experiment.yaml" for p in paths)
+        or any(
+            compiled.experiment.run.task == "train"
+            and len(compiled.experiment.train_seeds) > 1
+            for _, _, compiled in members
+        )
     )
     locations = {p: location(p) for p in paths} if canonical else {}
     common = (
@@ -53,8 +52,8 @@ def compile_files(
     )
     files, inventory, selected = [], {}, []
     member_sources = {}
-    output_root, identities, concurrency = None, set(), {}
-    for path, member_id, compiled in compile_members(paths, overrides):
+    output_root, identities = None, set()
+    for path, member_id, compiled in members:
         if not research and member_id in member_sources:
             raise ConfigurationError(
                 f"expanded batch ID {member_id!r} conflicts between {member_sources[member_id]} and {path}"
@@ -105,10 +104,6 @@ def compile_files(
                 authored
             )
         settings = compiled.experiment.run
-        if settings.tune != "off":
-            raise ConfigurationError(
-                "Base batch children use native execution; use standalone run for Tune"
-            )
         seeds = (
             compiled.experiment.train_seeds
             if research and settings.task == "train"
@@ -141,14 +136,6 @@ def compile_files(
                 raise ConfigurationError("duplicate scientific entry in Base batch")
             identities.add(scoped)
             batch = compiled.experiment.batch
-            if (
-                batch.stage in concurrency
-                and concurrency[batch.stage] != batch.parallel_files
-            ):
-                raise ConfigurationError(
-                    "Base batch stage must use one parallel_files ceiling"
-                )
-            concurrency[batch.stage] = batch.parallel_files
             files.append(
                 dict(
                     id=identity,
@@ -157,7 +144,6 @@ def compile_files(
                     study=str(relative_study) if research else None,
                     compiled=member,
                     stage=batch.stage,
-                    parallel_files=batch.parallel_files,
                     scientific_sha256=member.scientific_sha256,
                 )
             )
@@ -185,8 +171,6 @@ def compile_files(
         directory,
         tuple(files),
         output_root,
-        0,
-        "off",
         contract="reservation",
         operations=shared,
         research_layout=research,
@@ -251,9 +235,6 @@ def allocate_directory(directory_plan):
         "contract": "reservation",
         "directory": str(directory_plan.directory),
         "files": rows,
-        "calibration_seconds": 0,
-        "calibration_level": "off",
-        "calibration_candidate": "latest",
         "source": source_identity(),
         "implementation_sha256": implementation_identity(),
     }
@@ -276,7 +257,6 @@ def allocate_directory(directory_plan):
         if directory_plan.incremental
         else [row["id"] for row in rows],
         "tune_directory": None,
-        "calibration_status": "not_applicable",
         "smoke_status": "not_applicable",
     }
     write_json(root / "plan.json", plan)
@@ -324,7 +304,9 @@ def compile_members(paths, overrides):
         for key, values in matrix.items():
             from smartsom.config.experiment_layout import location
 
-            if key == "experiment.run.seed" and location(path) is not None:
+            if key == "experiment.run.seed" and (
+                location(path) is not None or "train_seeds" in read_document(path)
+            ):
                 raise ConfigurationError(
                     "research packages use train_seeds, not a run.seed matrix axis"
                 )
@@ -364,7 +346,15 @@ def compile_members(paths, overrides):
                 .strip()
                 for key, value in zip(matrix, values, strict=True)
             ]
-            compiled = compile_reservation(path, matrix_sets=sets, **overrides)
+            member_overrides = dict(overrides)
+            if "experiment.run.seed" in matrix:
+                matrix_seed = values[list(matrix).index("experiment.run.seed")]
+                if member_overrides.get("seed") is not None:
+                    raise ConfigurationError(
+                        "--seed conflicts with a run.seed matrix axis"
+                    )
+                member_overrides["seed"] = matrix_seed
+            compiled = compile_reservation(path, matrix_sets=sets, **member_overrides)
             yield path, f"{name}--{index:04d}", compiled
 
 
@@ -380,7 +370,6 @@ def frozen_row(row, child_plan, child):
         "scientific_sha256": [row["scientific_sha256"]],
         "task": row["compiled"].experiment.run.task,
         "stage": row["stage"],
-        "parallel_files": row["parallel_files"],
         "gate": None,
         "contract": "reservation",
     }

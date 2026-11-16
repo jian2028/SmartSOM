@@ -1,0 +1,20 @@
+# 工程搜索示例；参数范围不代表科研推荐。仅使用周期评估，三个目标无优先级。
+algorithm: optuna
+num_samples: 8
+seed: 101
+train_seed: 101
+objectives:
+  - panel: sample
+    metric: configured.all.makespan
+    mode: min
+  - panel: sample
+    metric: configured.all.mean_tardiness
+    mode: min
+  - panel: sample
+    metric: configured.all.final_passing_rate
+    mode: max
+parameters:
+  algorithm.production.policies.ppo.learner.params.learning_rate:
+    distribution: loguniform
+    lower: 0.00001
+    upper: 0.001

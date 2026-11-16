@@ -59,6 +59,8 @@ def _policy_label(algorithm):
         )
         target = component.get("target") or component.get("path")
         known = {
+            "smartsom.learning.rllib_config.ppo_config": "PPO",
+            "smartsom.learning.rllib_config.dqn_config": "DQN",
             "smartsom.learning.ppo.create_learner": "PPO",
             "smartsom.learning.dqn.create_learner": "DQN",
             "smartsom.policies.rule.create_policy": "Rule",
@@ -69,10 +71,17 @@ def _policy_label(algorithm):
             observation = policy["observation"].get("target") or policy[
                 "observation"
             ].get("path")
-            label += " / " + {
+            representation = {
                 "smartsom.representations.base.observation.create_observation": "Base",
                 "smartsom.representations.social.observation.create_observation": "Social",
             }.get(observation, "custom observation")
+            if (
+                observation
+                == "smartsom.representations.v2.observation.create_observation"
+            ):
+                arm = policy["observation"].get("params", {}).get("arm", "base")
+                representation = "Base" if arm == "base" else f"SL ({arm})"
+            label += " / " + representation
         names.append(label)
     return _list(names)
 
@@ -92,8 +101,6 @@ def _differences(members):
 
 
 def _budget(ex):
-    if ex.run.tune != "off":
-        return f"Tune {ex.run.tune}（候选预算见 --verbose）"
     if ex.run.task == "train":
         if ex.train_episodes is not None:
             return f"{ex.train_episodes:,} episodes / 任务"
@@ -164,10 +171,7 @@ def render_check(plan, *, verbose=False):
     ]
     budgets = [_budget(e) for e in experiments]
     total = ""
-    if all(
-        e.run.task == "train" and e.run.tune == "off" and e.train_episodes is None
-        for e in experiments
-    ):
+    if all(e.run.task == "train" and e.train_episodes is None for e in experiments):
         total = f"；总计 {sum(e.train_ticks for e in experiments):,} ticks"
     lines = [
         f"✓ 配置检查通过 · {len(members)} 个任务",
@@ -176,7 +180,7 @@ def render_check(plan, *, verbose=False):
         f"策略：{_common(methods)}",
         f"场景：{_common(world)}",
         f"配置网络：{_common(ownership)}",
-        f"Seed：{_list(seed for e in experiments for seed in (e.train_seeds if e.run.tune != 'off' else (e.run.seed,)))}",
+        f"Seed：{_list(seed for e in experiments for seed in (e.run.seed,))}",
         f"预算：{_common(budgets)}{total}",
         f"周期评估配置：{_common(periodic_evaluation)}",
         f"案例配置：{_common(panels)}",
@@ -206,11 +210,7 @@ def render_check(plan, *, verbose=False):
             else ("on" if protocol[s]["accept"]["allow_stop"] else "off")
             for s in ("pre", "post")
         ]
-        seeds = (
-            _list(member.experiment.train_seeds)
-            if member.experiment.run.tune != "off"
-            else str(member.experiment.run.seed)
-        )
+        seeds = str(member.experiment.run.seed)
         lines.append(f"{variant} / {seeds}    {switches[0]}         {switches[1]}")
     if len(members) > 8:
         lines.append(f"… 另有 {len(members) - 8} 个任务，使用 --verbose 查看全部")
@@ -226,7 +226,7 @@ def render_check(plan, *, verbose=False):
     lines.extend(
         [
             "",
-            f"运行：{operations['launch']['mode']} / {operations['concurrency']['mode']} / "
+            f"运行：{operations['launch']['mode']} / Ray Tune FIFO / "
             f"最大并发 {operations['concurrency']['max_concurrent']}（来源：{_path(origins)}）",
             "动作表达："
             + _common(

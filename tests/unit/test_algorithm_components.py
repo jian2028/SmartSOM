@@ -100,6 +100,30 @@ def recipe(method="rule"):
     return algorithm_document({"method": method})
 
 
+@pytest.mark.parametrize("method", ["ppo", "dqn"])
+def test_official_rllib_config_component_is_statically_checkable(method):
+    from smartsom.config.components import validate_components
+
+    document = yaml.safe_load(
+        (ROOT / "configs/algorithms/v2-base-ddqn.yaml").read_text()
+    )
+    document["production"]["policies"]["dqn"]["learner"] = {
+        "target": f"smartsom.learning.rllib_config.{method}_config",
+        "params": {"lr": 0.0003},
+    }
+    options = BaseAlgorithm.model_validate(document)
+    assert options.method == method
+    validate_components(options)
+    for params in (
+        {"update_trigger": "episode"},
+        {"return_estimator": "gae"},
+        {"gae_lambda": 0.95},
+    ):
+        document["production"]["policies"]["dqn"]["learner"]["params"] = params
+        with pytest.raises(ValueError, match="retired native learner parameters"):
+            validate_components(BaseAlgorithm.model_validate(document))
+
+
 def test_initialization_cannot_be_silently_overridden_per_role():
     document = recipe("dqn")
     document["production"]["policies"]["dqn"]["role_params"] = {

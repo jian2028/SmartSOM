@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_host_qualification_requires_stable_real_capacity_and_resets_on_pressure():
-    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+    from smartsom.telemetry.system_resources import GIB, ResourceSnapshot
 
     host = module("host_ready")
     now = [0.0]
@@ -35,7 +35,7 @@ def test_host_qualification_requires_stable_real_capacity_and_resets_on_pressure
 
 
 def test_unavailable_host_qualification_fails_without_skipping_or_running_tests():
-    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+    from smartsom.telemetry.system_resources import GIB, ResourceSnapshot
 
     host = module("host_ready")
     now = [0.0]
@@ -54,7 +54,7 @@ def test_unavailable_host_qualification_fails_without_skipping_or_running_tests(
 
 
 def test_tuning_qualification_requires_two_learners_and_observer_capacity():
-    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+    from smartsom.telemetry.system_resources import GIB, ResourceSnapshot
 
     host = module("host_ready")
     now = [0.0]
@@ -83,7 +83,7 @@ def test_tuning_qualification_requires_two_learners_and_observer_capacity():
 
 
 def test_two_cpu_host_cannot_qualify_for_parallel_native_acceptance():
-    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+    from smartsom.telemetry.system_resources import GIB, ResourceSnapshot
 
     host = module("host_ready")
     now = [0.0]
@@ -111,7 +111,7 @@ def test_two_cpu_host_cannot_qualify_for_parallel_native_acceptance():
 def test_native_acceptance_qualification_keeps_shared_memory_reserve(
     available, qualified
 ):
-    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+    from smartsom.telemetry.system_resources import GIB, ResourceSnapshot
 
     host = module("host_ready")
     now = [0.0]
@@ -159,6 +159,9 @@ def test_bounded_artifacts_prioritize_first_admission_evidence(tmp_path):
 
 
 def isolated_scopes(tmp_path, monkeypatch, files, selectors=None, prefix=None):
+    # The CI runner keeps fixtures under the repository. Give the synthetic
+    # project its own pytest root instead of inheriting our parent pyproject.
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")
     monkeypatch.syspath_prepend(str(ROOT / "scripts/ci"))
     runner = module("runner")
     monkeypatch.setattr(runner, "ROOT", tmp_path)
@@ -534,6 +537,7 @@ def test_allowlist_requires_exact_node_platform_and_reason():
     ],
 )
 def test_real_pytest_plugin_accounting(tmp_path, source, expected):
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")
     path = tmp_path / "test_sample.py"
     path.write_text(source)
     report = tmp_path / "coverage.json"
@@ -732,6 +736,8 @@ def test_public_learning_owner_and_required_job_cover_whole_files(manifest):
     import yaml
 
     public = manifest["suites"]["learning-public"]
+    assert "wandb" in public["extras"]
+    assert {"wandb", "ray.rllib"} <= set(public["requires"])
     expected = {
         "tests/integration/test_reservation_lifecycle.py",
     }

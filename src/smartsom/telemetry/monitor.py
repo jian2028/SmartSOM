@@ -300,55 +300,6 @@ def _receipt_notice(receipt):
     )
 
 
-def _remember_control(display, receipt, kind, task_id=None):
-    if kind not in {"pause", "resume", "remove", "retry"}:
-        return
-    row = dict(receipt)
-    row.setdefault("payload", {"kind": kind, "task_id": task_id})
-    identity = row.get("id", row.get("command_id"))
-    local = dict(getattr(display, "runtime_local_commands", {}))
-    local[identity] = row
-    display.runtime_local_commands = local
-    display.runtime_feedback_id = identity
-
-
-def _retry_from_rich(root, display, task_id=None):
-    """Submit a fixed retry snapshot; no task outside it is selected."""
-    from smartsom.experiments import batch_retry, runtime_control
-
-    if not runtime_control._RETRY_ENABLED:
-        raise ValueError("Retry 尚未启用；没有提交任务")
-    preview = batch_retry.preview_failed(
-        root, [task_id] if task_id is not None else None, include_paused=True
-    )
-    result = batch_retry.submit_preview(root, preview)
-    outcomes = result.get("outcomes", [])
-    if not outcomes:
-        return "没有 paused 或 failed 任务；未提交请求"
-    lines = []
-    for item in outcomes:
-        receipt = item.get("receipt")
-        if not receipt:
-            receipt = {
-                "id": f"preview-{preview['preview_sha256']}-{item['task_id']}",
-                "status": "rejected",
-                "reason": item.get("reason", "preflight unavailable"),
-            }
-        _remember_control(display, receipt, "retry", item["task_id"])
-        detail = item.get("reason") or item.get("status", "unknown")
-        lines.append(f"{item['task_id']}: {detail}")
-    return "Retry 请求（最终状态以回执为准）：\n" + "\n".join(lines)
-
-
-def _selected_resume_action(status, retry_enabled):
-    """Failed tasks retry; safely paused and queued tasks resume."""
-    # Existing resume already handles a safely paused worker, queued task,
-    # evaluation or nested job. Strict checkpoint retry is only for failures.
-    if status == "failed":
-        return "retry"
-    return "resume"
-
-
 def _control_notice(display):
     from rich.text import Text
 
@@ -371,18 +322,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
     previous_state = None
     confirm_until = 0.0
     requested_coverage = None
-    limit_buffer = None
-    limit_error = None
     search_buffer = None
-    interaction_notice = None
-    interaction_until = 0.0
-    pending_command = None
-    task_command_context = {}
-    task_action_target = None
-    queue_before = None
-    last_global_key = float("-inf")
-    remove_target = None
-    remove_buffer = ""
     exit_menu = False
     exit_owner_id = None
     tracking_prompt = None
@@ -404,35 +344,6 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     display.from_snapshot(snapshot)
                     now = time.monotonic()
                     runtime = (display.tuning or {}).get("runtime_control", {})
-                    if pending_command:
-                        commands = runtime.get("commands", {})
-                        receipt = (
-                            commands.get(pending_command)
-                            if isinstance(commands, dict)
-                            else next(
-                                (
-                                    item
-                                    for item in commands
-                                    if item.get("id") == pending_command
-                                ),
-                                None,
-                            )
-                        )
-                        if receipt and (receipt.get("payload") or {}).get("kind") in {
-                            "pause",
-                            "resume",
-                            "remove",
-                        }:
-                            pending_command = None
-                        elif receipt:
-                            interaction_notice = task_command_context.get(
-                                pending_command, ""
-                            ) + _receipt_notice(receipt)
-                            interaction_until = now + 5.0
-                            if receipt.get("status") in {"applied", "rejected"}:
-                                pending_command = None
-                    if now >= interaction_until:
-                        interaction_notice = None
                     age = max(0, time.time() - display.updated_at)
                     stale = (
                         age > 5
@@ -466,25 +377,10 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         )
                     elif confirm_until > now:
                         prompt = "3 秒内再次 Ctrl+C 关闭监控"
-                    elif remove_target is not None:
-                        from smartsom.telemetry.tuning_dashboard import runtime_status
-
-                        prompt = (
-                            f"移除批次 {remove_target['batch_id']}\n"
-                            f"任务 {remove_target['task_id']}\n"
-                            f"状态 {runtime_status(remove_target.get('task', {}).get('status'))} · 安全保存后释放资源，保留文件\n"
-                            f"输入 {remove_target['short_id']} 后 Enter 确认：{remove_buffer or '_'} · Esc 取消"
-                        )
-                    elif limit_buffer is not None:
-                        prompt = (
-                            limit_error + " · " if limit_error else ""
-                        ) + f"总并发上限：{limit_buffer or '_'}（Enter 确认，Esc 取消）"
                     elif search_buffer is not None:
                         prompt = (
                             f"搜索任务：{search_buffer or '_'} · Enter 应用 · Esc 取消"
                         )
-                    elif interaction_notice:
-                        prompt = interaction_notice
                     if prompt:
                         display.notice = (
                             display.notice + "\n" + prompt
@@ -501,10 +397,6 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     if exit_menu
                     else "tracking"
                     if tracking_prompt
-                    else "remove"
-                    if remove_target is not None
-                    else "limit"
-                    if limit_buffer is not None
                     else "search"
                     if search_buffer is not None
                     else None
@@ -517,8 +409,6 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     and not display.live
                 ):
                     _control_notice(display)
-                if task_action_target is None:
-                    task_action_target = display.task_pages.anchor
                 previous_state = state
                 if once or (display.status in FINAL and not exit_menu):
                     return 0
@@ -569,8 +459,6 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     controlling
                     and (interrupts[0] or key == "q")
                     and search_buffer is None
-                    and limit_buffer is None
-                    and remove_target is None
                 ):
                     from smartsom.experiments.control import read
 
@@ -601,7 +489,6 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         search_buffer = None
                         display.notice = None
                         display.publish(force=True)
-                        task_action_target = display.task_pages.anchor
                         display.selection_notice = None
                     elif key in {"\x7f", "\b"}:
                         search_buffer = search_buffer[:-1]
@@ -614,187 +501,10 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         search_buffer += key
                     continue
 
-                if limit_buffer is not None and interrupts[0]:
-                    interrupts[0] = 0
-                    limit_buffer, limit_error = None, None
-                    confirm_until = 0.0
-                    continue
-
-                if remove_target is not None:
-                    if interrupts[0] or key == "\x1b":
-                        interrupts[0] = 0
-                        remove_target, remove_buffer = None, ""
-                        interaction_notice = "移除已取消"
-                    elif key in {"\r", "\n"}:
-                        if remove_buffer == remove_target["short_id"]:
-                            from smartsom.experiments.runtime_control import submit
-
-                            try:
-                                receipt = submit(
-                                    root,
-                                    "remove",
-                                    task_id=remove_target["task_id"],
-                                    expected_revision=remove_target["revision"],
-                                    confirmation=remove_target["confirmation"],
-                                )
-                                pending_command = receipt.get(
-                                    "id", receipt.get("command_id")
-                                )
-                                _remember_control(
-                                    display, receipt, "remove", remove_target["task_id"]
-                                )
-                                interaction_notice = None
-                            except (ValueError, OSError) as exc:
-                                interaction_notice = str(exc)
-                        else:
-                            interaction_notice = "目标未匹配，移除已取消"
-                        remove_target, remove_buffer = None, ""
-                    elif key in {"up", "down", "pageup", "pagedown"}:
-                        amount = (
-                            getattr(display, "runtime_confirmation_offset_page_size", 1)
-                            if key in {"pageup", "pagedown"}
-                            else 1
-                        )
-                        display.runtime_confirmation_offset = getattr(
-                            display, "runtime_confirmation_offset", 0
-                        ) + (amount if key in {"down", "pagedown"} else -amount)
-                    elif key in {"\x7f", "\b"}:
-                        remove_buffer = remove_buffer[:-1]
-                    elif (
-                        key
-                        and len(key) == 1
-                        and key.isprintable()
-                        and len(remove_buffer) < 128
-                    ):
-                        remove_buffer += key
-                    interaction_until = time.monotonic() + 5.0
-                    continue
-                if (
-                    controlling
-                    and runtime
-                    and limit_buffer is None
-                    and not getattr(display, "runtime_detail_task", None)
-                    and not getattr(display, "runtime_help", False)
-                    and (key == "Q" or getattr(display, "runtime_queue", False))
-                ):
-                    if getattr(display, "runtime_queue", False):
-                        if key in {"Q", "\x1b"} or interrupts[0]:
-                            interrupts[0] = 0
-                            display.runtime_queue = False
-                            if queue_before is not None:
-                                (
-                                    display.task_pages.scope,
-                                    display.task_pages.query,
-                                    display.task_pages.anchor,
-                                ) = queue_before
-                            queue_before = None
-                            display.selection_notice = None
-                        elif key in {"up", "down", "j", "k"}:
-                            ids = display.task_pages.ids
-                            if ids:
-                                index = (
-                                    ids.index(display.task_pages.anchor)
-                                    if display.task_pages.anchor in ids
-                                    else 0
-                                )
-                                display.task_pages.anchor = ids[
-                                    max(
-                                        0,
-                                        min(
-                                            len(ids) - 1,
-                                            index + (1 if key in {"down", "j"} else -1),
-                                        ),
-                                    )
-                                ]
-                            display.selection_notice = None
-                            task_action_target = display.task_pages.anchor
-                        elif key in {"\r", "\n", "left", "right"}:
-                            from smartsom.experiments.runtime_control import submit
-
-                            try:
-                                target = task_action_target
-                                if (
-                                    not target
-                                    or target != display.task_pages.anchor
-                                    or target not in display.task_pages.ids
-                                ):
-                                    raise ValueError(
-                                        "任务已离开排队视图，请重新选择后操作"
-                                    )
-                                action = (
-                                    ("earlier" if key == "left" else "later")
-                                    if key in {"left", "right"}
-                                    else "remove"
-                                    if target in runtime.get("priority_tasks", [])
-                                    else "add"
-                                )
-                                receipt = submit(
-                                    root,
-                                    "priority",
-                                    task_id=target,
-                                    value=action,
-                                    expected_revision=runtime.get("revision"),
-                                )
-                                pending_command = receipt.get(
-                                    "id", receipt.get("command_id")
-                                )
-                                task_command_context[pending_command] = (
-                                    f"优先队列 · {target} · {action}\n"
-                                )
-                                interaction_notice = "优先顺序请求已发送"
-                            except (OSError, ValueError) as exc:
-                                interaction_notice = str(exc)
-                            interaction_until = time.monotonic() + 5
-                        elif key == "?":
-                            display.runtime_help = True
-                            display.runtime_help_offset = 0
-                        elif key == "d":
-                            return 0
-                    else:
-                        queue_before = (
-                            display.task_pages.scope,
-                            display.task_pages.query,
-                            display.task_pages.anchor,
-                        )
-                        display.runtime_queue = True
-                        display.task_pages.scope, display.task_pages.query = (
-                            "queued",
-                            "",
-                        )
-                        display.task_pages.pending = 0
-                        display.selection_notice = None
-                    display.publish(force=True)
-                    if key in {"Q", "\x1b"}:
-                        task_action_target = display.task_pages.anchor
-                    continue
-                if (
-                    controlling
-                    and key == "D"
-                    and limit_buffer is None
-                    and not getattr(display, "runtime_detail_task", None)
-                    and not getattr(display, "runtime_help", False)
-                ):
-                    from smartsom.experiments.runtime_control import removal_target
-
-                    runtime = (display.tuning or {}).get("runtime_control", {})
-                    target_id = task_action_target
-                    try:
-                        if target_id is None or target_id not in display.task_pages.ids:
-                            raise ValueError(
-                                "选中任务已不可用，请重新选择；未发送控制请求"
-                            )
-                        remove_target = removal_target(root, target_id)
-                        remove_buffer = ""
-                        display.runtime_confirmation_offset = 0
-                    except (ValueError, OSError) as exc:
-                        interaction_notice = str(exc)
-                        interaction_until = time.monotonic() + 5.0
-                    continue
                 while interrupts[0]:
                     interrupts[0] -= 1
                     if time.monotonic() >= confirm_until:
                         confirm_until = time.monotonic() + 3.0
-                        interaction_notice = None
                         display.notice = "再次 Ctrl+C 确认"
                         display.publish(force=True)
                         continue
@@ -816,91 +526,12 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         ) + (amount if key in {"down", "j", "pagedown"} else -amount)
                     display.publish(force=True)
                     continue
-                if key == "?" and limit_buffer is None and runtime:
+                if key == "?" and runtime:
                     display.runtime_help = True
                     display.runtime_help_offset = 0
                     display.publish(force=True)
                     continue
-                if controlling and limit_buffer is None and key == "U":
-                    target = (
-                        getattr(display, "runtime_detail_task", None)
-                        or task_action_target
-                    )
-                    try:
-                        interaction_notice = _retry_from_rich(root, display)
-                    except (OSError, ValueError) as exc:
-                        interaction_notice = str(exc)
-                    interaction_until = time.monotonic() + 5.0
-                    display.notice = interaction_notice
-                    display.publish(force=True)
-                    continue
-                if controlling and limit_buffer is None and key in {"P", "R"}:
-                    runtime = (display.tuning or {}).get("runtime_control", {})
-                    if runtime:
-                        from smartsom.experiments.runtime_control import submit
-
-                        target = (
-                            getattr(display, "runtime_detail_task", None)
-                            or task_action_target
-                        )
-                        action = "pause" if key == "P" else "resume"
-                        context = f"任务 {target} · {action} 请求（状态以观测为准）\n"
-                        try:
-                            if not target:
-                                raise ValueError("未选中任务，未发送控制请求")
-                            if (
-                                target not in display.task_pages.ids
-                                or runtime.get("tasks", {})
-                                .get(target, {})
-                                .get("status")
-                                == "removed"
-                            ):
-                                raise ValueError(
-                                    "选中任务已不可用，请重新选择；未发送控制请求"
-                                )
-                            if key == "R":
-                                from smartsom.experiments import runtime_control
-
-                                status = (
-                                    runtime.get("tasks", {}).get(target)
-                                    or runtime.get("additions", {}).get(target)
-                                    or {}
-                                ).get("status")
-                                if (
-                                    _selected_resume_action(
-                                        status, runtime_control._RETRY_ENABLED
-                                    )
-                                    == "retry"
-                                ):
-                                    interaction_notice = _retry_from_rich(
-                                        root, display, target
-                                    )
-                                    interaction_until = time.monotonic() + 5.0
-                                    display.notice = interaction_notice
-                                    display.publish(force=True)
-                                    continue
-                            from smartsom.telemetry.tuning_dashboard import (
-                                pending_pause,
-                            )
-
-                            receipt = (
-                                pending_pause(display, target)
-                                if action == "pause"
-                                else None
-                            ) or submit(root, action, task_id=target)
-                            _remember_control(display, receipt, action, target)
-                            pending_command = receipt.get(
-                                "id", receipt.get("command_id")
-                            )
-                            task_command_context[pending_command] = context
-                            interaction_notice = None
-                        except (OSError, ValueError) as exc:
-                            interaction_notice = context + str(exc)
-                        interaction_until = time.monotonic() + 5.0
-                        display.notice = interaction_notice
-                        display.publish(force=True)
-                        continue
-                if key == "a" and limit_buffer is None:
+                if key == "a":
                     from smartsom.telemetry.tuning_dashboard import (
                         runtime_feedback,
                         runtime_feedback_commands,
@@ -916,9 +547,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         )
                         display.publish(force=True)
                     continue
-                if limit_buffer is None and getattr(
-                    display, "runtime_detail_task", None
-                ):
+                if getattr(display, "runtime_detail_task", None):
                     if key == "\x1b":
                         display.runtime_detail_task = None
                     elif key in {"up", "down", "j", "k"}:
@@ -940,10 +569,10 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         return 0
                     display.publish(force=True)
                     continue
-                if limit_buffer is None and runtime and key == "/":
+                if runtime and key == "/":
                     search_buffer = display.task_pages.query
                     continue
-                if limit_buffer is None and runtime and key in {"e", "n"}:
+                if runtime and key in {"e", "n"}:
                     previous = display.task_pages.anchor
                     display.task_pages.scope = (
                         "unfinished"
@@ -960,26 +589,20 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             (ids.index(previous) + 1) % len(ids)
                         ]
                         display.publish(force=True)
-                    task_action_target = display.task_pages.anchor
                     display.selection_notice = None
                     continue
-                if (
-                    key == "f"
-                    and limit_buffer is None
-                    and (display.tuning or {}).get("runtime_control")
-                ):
+                if key == "f" and (display.tuning or {}).get("runtime_control"):
                     display.task_pages.cycle_scope()
                     display.publish(force=True)
-                    task_action_target = display.task_pages.anchor
                     display.selection_notice = None
                     continue
-                if key in {"\r", "\n", "i"} and limit_buffer is None:
+                if key in {"\r", "\n", "i"}:
                     display.runtime_detail_task = display.task_pages.anchor
                     display.runtime_detail_offset = 0
                     display.runtime_detail_raw = False
                     display.publish(force=True)
                     continue
-                if key in {"j", "k", "up", "down"} and limit_buffer is None:
+                if key in {"j", "k", "up", "down"}:
                     ids = display.task_pages.ids
                     if ids:
                         index = (
@@ -997,107 +620,14 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             )
                         ]
                         display.publish(force=True)
-                        task_action_target = display.task_pages.anchor
                         display.selection_notice = None
                     continue
-                if key in {"[", "]", "left", "right"} and limit_buffer is None:
+                if key in {"[", "]", "left", "right"}:
                     if display.move_task_page(1 if key in {"]", "right"} else -1):
                         display.publish(force=True)
-                        task_action_target = display.task_pages.anchor
                         display.selection_notice = None
                     continue
                 runtime = (display.tuning or {}).get("runtime_control", {})
-                if controlling and (runtime or (display.tuning or {}).get("manual")):
-                    if limit_buffer is None and runtime and key in {"+", "-", " "}:
-                        from smartsom.experiments.runtime_control import submit
-
-                        try:
-                            if key == " ":
-                                from smartsom.telemetry.tuning_dashboard import (
-                                    pending_pause,
-                                )
-
-                                now = time.monotonic()
-                                gap = now - last_global_key
-                                last_global_key = now
-                                # A held/buffered Space must not reverse a pause once
-                                # its observation happens to finish during the burst.
-                                if gap < 0.5:
-                                    continue
-                                existing = pending_pause(display)
-                                action = (
-                                    "pause"
-                                    if existing or not runtime.get("paused")
-                                    else "resume"
-                                )
-                                receipt = existing or submit(root, action)
-                                _remember_control(display, receipt, action)
-                                interaction_notice = None
-                            else:
-                                receipt = submit(
-                                    root, "delta", value=1 if key == "+" else -1
-                                )
-                                interaction_notice = _receipt_notice(receipt)
-                            pending_command = receipt.get(
-                                "id", receipt.get("command_id")
-                            )
-                        except (OSError, ValueError) as exc:
-                            interaction_notice = str(exc)
-                        interaction_until = time.monotonic() + 5.0
-                        display.notice = interaction_notice
-                        display.publish(force=True)
-                        continue
-                    if limit_buffer is not None:
-                        if key and key.isdecimal() and len(limit_buffer) < 4:
-                            limit_buffer += key
-                            limit_error = None
-                        elif key in {"\x7f", "\b"}:
-                            limit_buffer = limit_buffer[:-1]
-                            limit_error = None
-                        elif key in {"\r", "\n"}:
-                            try:
-                                if not limit_buffer or int(limit_buffer) < 1:
-                                    limit_error = "请输入大于 0 的整数"
-                                    continue
-                                if runtime:
-                                    from smartsom.experiments.runtime_control import (
-                                        submit,
-                                    )
-
-                                    receipt = submit(
-                                        root, "limit", value=int(limit_buffer)
-                                    )
-                                    pending_command = receipt.get(
-                                        "id", receipt.get("command_id")
-                                    )
-                                    display.notice = _receipt_notice(receipt)
-                                else:
-                                    raise ValueError(
-                                        "historical queue controls require archived source"
-                                    )
-                                interaction_notice = display.notice
-                            except (OSError, ValueError) as exc:
-                                display.notice = str(exc)
-                                interaction_notice = display.notice
-                            interaction_until = time.monotonic() + 5.0
-                            limit_buffer = None
-                        elif key == "\x1b":
-                            limit_buffer = None
-                        display.control_input = (
-                            "limit" if limit_buffer is not None else None
-                        )
-                        if limit_buffer is not None:
-                            display.notice = f"总并发上限：{limit_buffer or '_'}（Enter 确认，Esc 取消）"
-                        display.publish(force=True)
-                        continue
-                    if key == "c":
-                        interaction_notice = None
-                        limit_buffer = ""
-                        limit_error = None
-                        display.control_input = "limit"
-                        display.notice = "输入总并发上限，Enter 确认，Esc 取消"
-                        display.publish(force=True)
-                        continue
                 if key == "d":
                     return 0
                 if key == "p" and controlling:

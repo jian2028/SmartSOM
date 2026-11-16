@@ -10,7 +10,8 @@ import yaml
 from smartsom.experiments import author_batch, background, reservation, runtime_control
 from smartsom.experiments.evidence import write_json
 from smartsom.experiments.launch import compile_launch, run_launch
-from tests.unit.test_algorithm_components import author, recipe
+from tests.helpers.algorithm import rllib_recipe as recipe
+from tests.unit.test_algorithm_components import author
 
 
 def batch(tmp_path):
@@ -65,15 +66,30 @@ def lightweight(monkeypatch):
         reservation, "load", lambda root: json.loads((root / "plan.json").read_text())
     )
     monkeypatch.setattr(background, "_check_owner", lambda root: None)
-    monkeypatch.setattr(author_batch, "bind", lambda root: None)
-    monkeypatch.setattr(author_batch, "requested", lambda root: False)
+    from types import SimpleNamespace
+
     monkeypatch.setattr(
-        "smartsom.experiments.queue_admission.initialize", lambda *a, **k: None
+        reservation, "arguments", lambda root: (None, SimpleNamespace(max_failures=0))
     )
     calls = []
 
-    def run_children(root, plan, state, rows, **kwargs):
-        for row in rows:
+    class Results(list):
+        errors = []
+
+    def fit_cohort(roots, **kwargs):
+        results = Results()
+        for child in map(Path, roots):
+            root = next(
+                parent
+                for parent in child.parents
+                if (parent / "batch.json").exists() and (parent / "run.json").exists()
+            )
+            plan = json.loads((root / "plan.json").read_text())
+            row = next(
+                row
+                for row in plan["files"]
+                if (root / row["child"]).resolve() == child.resolve()
+            )
             calls.append(row["id"])
             child = root / row["child"]
             (child / "last.pt").write_bytes(row["id"].encode())
@@ -98,19 +114,16 @@ def lightweight(monkeypatch):
             )
             (child / "evaluation").mkdir(exist_ok=True)
             write_json(child / "evaluation/completed.json", {"fixture": True})
-            state["files"][row["id"]]["status"] = "completed"
-        return True
+            results.append(
+                SimpleNamespace(
+                    config={"trial": {"root": str(child.resolve())}},
+                    metrics={"done": True},
+                    error=None,
+                )
+            )
+        return results
 
-    monkeypatch.setattr(author_batch, "_run_children", run_children)
-
-    class Tail:
-        def __init__(self, root):
-            self.jobs, self.unfinished = {}, False
-
-        def tick(self):
-            pass
-
-    monkeypatch.setattr("smartsom.experiments.runtime_workers.NativeScheduler", Tail)
+    monkeypatch.setattr("smartsom.experiments.tune_batch.fit_cohort", fit_cohort)
     return calls
 
 
@@ -132,7 +145,7 @@ def test_initial_two_supplement_four_repeat_zero_and_unchanged_artifacts(
         name: hashes(root / "trials" / name / "seed-4101")
         for name in ("medium-base", "medium-sl")
     }
-    assert not runtime_control.snapshot(root)["accepting"]
+    assert not runtime_control.snapshot(root)
     second = run_launch(compile_batch(folder, resume_missing=True))
     assert second["directory"] == first["directory"]
     assert second["submitted_tasks"] == 4 and second["completed_tasks"] == 6
@@ -154,10 +167,10 @@ def test_full_inventory_and_path_binding_reject_changes(tmp_path, lightweight):
     path = folder / "small-base.yaml"
     old = path.read_text()
     path.write_text(old.replace("train_ticks: 10", "train_ticks: 99"))
-    with pytest.raises(ValueError, match="inventory changed"):
+    with pytest.raises(ValueError, match="frozen scientific inventory"):
         run_launch(compile_batch(folder, resume_missing=True))
     path.write_text(old)
-    with pytest.raises(ValueError, match="inventory changed"):
+    with pytest.raises(ValueError, match="frozen scientific inventory"):
         run_launch(
             compile_batch(
                 folder, resume_missing=True, sets=["experiment.train_seeds=1"]
@@ -167,7 +180,7 @@ def test_full_inventory_and_path_binding_reject_changes(tmp_path, lightweight):
 
     moved = tmp_path / "other" / "batch"
     shutil.copytree(folder, moved)
-    with pytest.raises(ValueError, match="directory or scientific"):
+    with pytest.raises(ValueError, match="frozen scientific inventory"):
         run_launch(
             compile_batch(
                 moved,
@@ -177,93 +190,18 @@ def test_full_inventory_and_path_binding_reject_changes(tmp_path, lightweight):
         )
 
 
-def test_edited_seed_list_keeps_old_results_and_selects_new(tmp_path, lightweight):
+def test_edited_seed_list_requires_new_run_and_preserves_results(tmp_path, lightweight):
     folder = batch(tmp_path)
     initial = compile_batch(folder)
     run_launch(initial)
-    root = initial.output_root
-    old = hashes(root / "trials/medium-base/seed-4101")
+    before = hashes(initial.output_root)
     path = folder / "medium-base.yaml"
     config = yaml.safe_load(path.read_text())
     config["train_seeds"] = [4103, 4101, 101, 102]
     path.write_text(yaml.safe_dump(config))
-    result = run_launch(
-        compile_launch(
-            folder,
-            ids=["medium-base"],
-            selectors=[{"train_seeds": [101]}],
-            operations={"output_root": str(root)},
-        )
-    )
-    assert result["submitted_tasks"] == 1
-    assert hashes(root / "trials/medium-base/seed-4101") == old
-    assert (root / "trials/medium-base/seed-101/last.pt").is_file()
-    assert not (root / "trials/medium-base/seed-102/last.pt").exists()
-    result = run_launch(
-        compile_launch(
-            folder,
-            ids=["medium-base"],
-            resume_missing=True,
-            operations={"output_root": str(root)},
-        )
-    )
-    assert result["submitted_tasks"] == 1
-    assert (root / "trials/medium-base/seed-102/last.pt").is_file()
-    assert hashes(root / "trials/medium-base/seed-4101") == old
-    result = run_launch(
-        compile_launch(
-            folder,
-            ids=["medium-base"],
-            resume_missing=True,
-            operations={"output_root": str(root)},
-        )
-    )
-    assert result["submitted_tasks"] == 0
-
-    # Reintroducing an already completed seed must not run it again.
-    config["train_seeds"] = [4102, 101, 102]
-    path.write_text(yaml.safe_dump(config))
-    result = run_launch(
-        compile_launch(
-            folder,
-            ids=["medium-base"],
-            resume_missing=True,
-            operations={"output_root": str(root)},
-        )
-    )
-    assert result["submitted_tasks"] == 0
-    assert hashes(root / "trials/medium-base/seed-4101") == old
-
-    # The authored run.seed is not the per-child seed and must not be hidden.
-    original_seed = config["run"].get("seed")
-    config["run"]["seed"] = 999
-    path.write_text(yaml.safe_dump(config))
-    with pytest.raises(ValueError, match="scientific inventory changed"):
-        run_launch(
-            compile_launch(
-                folder,
-                ids=["medium-base"],
-                resume_missing=True,
-                operations={"output_root": str(root)},
-            )
-        )
-    if original_seed is None:
-        del config["run"]["seed"]
-    else:
-        config["run"]["seed"] = original_seed
-
-    # An unrelated scientific change is still rejected before any work.
-    config["train_ticks"] += 1
-    path.write_text(yaml.safe_dump(config))
-    with pytest.raises(ValueError, match="scientific inventory changed"):
-        run_launch(
-            compile_launch(
-                folder,
-                ids=["medium-base"],
-                resume_missing=True,
-                operations={"output_root": str(root)},
-            )
-        )
+    with pytest.raises(ValueError, match="frozen scientific inventory"):
+        run_launch(compile_batch(folder, resume_missing=True))
+    assert hashes(initial.output_root) == before
 
 
 def test_single_file_run_select_reuses_owner_batch(tmp_path, lightweight):
@@ -287,7 +225,6 @@ def test_single_file_run_select_reuses_owner_batch(tmp_path, lightweight):
     )
     old = hashes(root / "trials/medium-base/seed-4101")
     config = yaml.safe_load(path.read_text())
-    config["train_seeds"].append(101)
     path.write_text(yaml.safe_dump(config))
     assert (
         main(
@@ -297,18 +234,17 @@ def test_single_file_run_select_reuses_owner_batch(tmp_path, lightweight):
                 "--output-root",
                 str(root),
                 "--select",
-                "train_seeds: [101]",
+                "train_seeds: [4102]",
             ]
         )
         == 0
     )
-    assert (root / "trials/medium-base/seed-101/last.pt").is_file()
+    assert (root / "trials/medium-base/seed-4102/last.pt").is_file()
     assert hashes(root / "trials/medium-base/seed-4101") == old
-    assert lightweight == ["medium-base--seed-4101", "medium-base--seed-101"]
+    assert lightweight == ["medium-base--seed-4101", "medium-base--seed-4102"]
     assert main(["run", str(path), "--output-root", str(root), "--resume-missing"]) == 0
     assert lightweight == [
         "medium-base--seed-4101",
-        "medium-base--seed-101",
         "medium-base--seed-4102",
         "medium-base--seed-4103",
     ]
@@ -330,32 +266,16 @@ def test_source_change_and_live_driver_rejected(tmp_path, lightweight, monkeypat
         run_launch(compile_batch(folder, resume_missing=True))
 
 
-def test_completed_training_pending_evaluation_and_failed_tasks(tmp_path, lightweight):
+def test_incomplete_final_panel_requires_whole_run_restore(tmp_path, lightweight):
     folder = batch(tmp_path)
     initial = compile_batch(folder, first_train_seeds=1)
     run_launch(initial)
     root = initial.output_root
-    first_child = root / "trials/medium-base/seed-4101"
-    (first_child / "evaluation/completed.json").unlink()
-    # A completed parent must not cause the missing final panel to be skipped.
-    state = json.loads((root / "batch.json").read_text())
-    state["status"] = "completed"
-    write_json(root / "batch.json", state)
-    result = run_launch(compile_batch(folder, first_train_seeds=1, resume_missing=True))
-    assert result["submitted_tasks"] == 1
-    assert lightweight.count("medium-base--seed-4101") == 2
-    state = json.loads((root / "batch.json").read_text())
-    state["files"]["medium-base--seed-4102"]["status"] = "failed"
-    write_json(root / "batch.json", state)
+    (root / "trials/medium-base/seed-4101/evaluation/completed.json").unlink()
     before = hashes(root)
-    with pytest.raises(ValueError, match="no complete continuation"):
-        run_launch(compile_batch(folder, resume_missing=True))
+    with pytest.raises(ValueError, match="require resume or retry"):
+        run_launch(compile_batch(folder, first_train_seeds=1, resume_missing=True))
     assert hashes(root) == before
-    assert "medium-base--seed-4102" not in lightweight
-    # Failed submission did not change the prior selected task set.
-    assert (
-        "medium-base--seed-4102" not in author_batch.load(root)[2]["selection"]["tasks"]
-    )
 
 
 def test_interrupted_without_continuation_is_preserved(tmp_path, lightweight):
@@ -367,7 +287,7 @@ def test_interrupted_without_continuation_is_preserved(tmp_path, lightweight):
     state["files"]["medium-base--seed-4102"]["status"] = "running"
     write_json(root / "batch.json", state)
     before = hashes(root)
-    with pytest.raises(ValueError, match="no complete continuation"):
+    with pytest.raises(ValueError, match="require resume or retry"):
         run_launch(compile_batch(folder, resume_missing=True))
     assert hashes(root) == before
 
@@ -393,7 +313,7 @@ def test_submission_claim_covers_background_handoff(tmp_path, lightweight, monke
     assert result["startup_status"] == "ready" and seen == [initial.output_root]
 
 
-def test_stage_barrier_and_holds_survive(tmp_path, lightweight):
+def test_stage_selection_survives_supplement(tmp_path, lightweight):
     folder = batch(tmp_path)
     for name in ("medium-base", "medium-sl"):
         path = folder / (name + ".yaml")
@@ -403,14 +323,9 @@ def test_stage_barrier_and_holds_survive(tmp_path, lightweight):
     initial = compile_batch(folder, first_train_seeds=1)
     result = run_launch(initial)
     assert result["status"] == "partial" and result["completed_tasks"] == 2
-    assert len(lightweight) == 2
-    root = initial.output_root
-    with runtime_control.transaction(root) as saved:
-        saved["paused_tasks"] = ["medium-base--seed-4101"]
-    from smartsom.experiments.incremental_batch import activate
-
-    activate(compile_batch(folder, resume_missing=True))
-    assert runtime_control.snapshot(root)["paused_tasks"] == ["medium-base--seed-4101"]
+    result = run_launch(compile_batch(folder, resume_missing=True))
+    assert result["completed_tasks"] == 6
+    assert len(lightweight) == len(set(lightweight)) == 6
 
 
 def test_count_override_remains_scientific_and_parser_accepts_selection(tmp_path):
@@ -430,6 +345,9 @@ def test_count_override_remains_scientific_and_parser_accepts_selection(tmp_path
 
 
 def test_named_default_destination_is_under_runs_not_inputs(tmp_path, monkeypatch):
+    # Make this a standalone project even when CI fixtures live under our repo.
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'fixture'\n")
+    (tmp_path / "configs").mkdir(exist_ok=True)
     folder = batch(tmp_path)
     monkeypatch.chdir(tmp_path)
     plan = compile_launch(folder, first_train_seeds=1)
@@ -512,54 +430,19 @@ background.child(Path(sys.argv[1]), nonce=sys.argv[2])
             assert process.wait(timeout=15) == 0
 
 
-def test_stopped_and_explicit_failed_recovery_keep_existing_continuation(
-    tmp_path, lightweight
-):
+@pytest.mark.parametrize("status", ["stopped", "failed", "running", "paused"])
+def test_started_trials_cannot_use_resume_missing(tmp_path, lightweight, status):
     folder = batch(tmp_path)
     initial = compile_batch(folder, first_train_seeds=1)
     run_launch(initial)
     root = initial.output_root
     state = json.loads((root / "batch.json").read_text())
-    state["files"]["medium-base--seed-4101"]["status"] = "stopped"
-    state["files"]["medium-sl--seed-4101"]["status"] = "failed"
-    state["status"] = "stopped"
+    state["files"]["medium-base--seed-4101"]["status"] = status
     write_json(root / "batch.json", state)
-    marker = root / "trials/medium-base/seed-4101/continuation/current.json"
-    prior = marker.read_bytes()
-    result = run_launch(compile_batch(folder, first_train_seeds=1, resume_missing=True))
-    assert result["submitted_tasks"] == 2 and result["failed_tasks"] == 0
-    assert marker.read_bytes() == prior
-    result = author_batch.execute_saved(root, retry_failed=True)
-    assert result["failed_tasks"] == 0 and result["completed_tasks"] == 2
-    assert lightweight.count("medium-base--seed-4101") == 2
-    assert lightweight.count("medium-sl--seed-4101") == 2
-
-
-def test_official_runtime_routes_pending_final_evaluation_without_overwriting_model(
-    tmp_path, lightweight, monkeypatch
-):
-    folder = batch(tmp_path)
-    initial = compile_batch(folder, first_train_seeds=1)
-    run_launch(initial)
-    child = initial.output_root / "trials/medium-base/seed-4101"
-    (child / "evaluation/completed.json").unlink()
-    write_json(child / "progress.json", {"status": "completed"})
-    model = (child / "last.pt").read_bytes()
-    called = []
-
-    def complete_panel(args):
-        assert (args.output / "last.pt").read_bytes() == model
-        assert (args.output / "continuation/current.json").is_file()
-        called.append(args.output)
-        write_json(args.output / "evaluation/completed.json", {"fixture": True})
-        write_json(args.output / "progress.json", {"status": "completed"})
-
-    monkeypatch.setattr(reservation.runtime, "train", complete_panel)
-    result = reservation.execute_saved(child)
-    assert result["status"] == "completed" and called == [child]
-    assert (child / "last.pt").read_bytes() == model
-    reservation.execute_saved(child)
-    assert called == [child]
+    before = hashes(root)
+    with pytest.raises(ValueError, match="require resume or retry"):
+        run_launch(compile_batch(folder, first_train_seeds=1, resume_missing=True))
+    assert hashes(root) == before
 
 
 def test_deferred_tasks_are_not_displayed_as_running_or_finished():
@@ -576,51 +459,3 @@ def test_deferred_tasks_are_not_displayed_as_running_or_finished():
         assert display.task_counts() == (0, 0)
     finally:
         display.close()
-
-
-@pytest.mark.parametrize("started", [False, True])
-def test_resume_unstarted_stopped_addition_does_not_require_checkpoint(
-    tmp_path, lightweight, monkeypatch, started
-):
-    from types import SimpleNamespace
-
-    folder = batch(tmp_path)
-    initial = compile_batch(folder, first_train_seeds=1)
-    run_launch(initial)
-    root = initial.output_root
-    state = json.loads((root / "batch.json").read_text())
-    state["status"] = "stopped"
-    write_json(root / "batch.json", state)
-    child = tmp_path / "appended"
-    child.mkdir()
-    with runtime_control.transaction(root) as saved:
-        saved["additions"]["new"] = {
-            "root": str(child),
-            "owner_root": str(tmp_path / "owner"),
-            "status": "stopped",
-            "started": started,
-        }
-        saved["paused_tasks"] = ["morris"]
-    monkeypatch.setattr(
-        reservation, "arguments", lambda root: (None, SimpleNamespace(task="train"))
-    )
-    observed = []
-
-    def finish_addition():
-        with runtime_control.transaction(root) as saved:
-            observed.append(saved["additions"]["new"]["status"])
-            saved["additions"]["new"]["status"] = "completed"
-
-    monkeypatch.setattr(
-        "smartsom.experiments.runtime_workers.NativeScheduler",
-        lambda root: SimpleNamespace(tick=finish_addition, unfinished=False, jobs={}),
-    )
-    result = author_batch.execute_saved(root)
-    if started:
-        assert result["status"] == "failed"
-        assert "appended training has no complete continuation" in result["error"]
-        assert runtime_control.snapshot(root)["additions"]["new"]["status"] == "stopped"
-    else:
-        assert result["status"] == "partial"
-        assert observed == ["queued"]
-        assert runtime_control.snapshot(root)["paused_tasks"] == ["morris"]

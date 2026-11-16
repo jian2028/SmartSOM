@@ -479,6 +479,12 @@ class BaseAlgorithm(Strict):
     def method(self):
         spec = self.production.policies[self.production.default]
         entry = spec.learner if spec.kind == "learning" else spec.implementation
+        official = {
+            "smartsom.learning.rllib_config.ppo_config": "ppo",
+            "smartsom.learning.rllib_config.dqn_config": "dqn",
+        }
+        if entry.target in official:
+            return official[entry.target]
         return (
             (entry.target or self.production.default).split(".")[-2]
             if entry.target
@@ -646,20 +652,26 @@ class ReservationRun(Strict):
     diagnostics: bool = False
     metrics: Literal["auto", "off", "summary", "detailed"] = "auto"
     metric_interval: int = Field(default=50, gt=0)
-    tune: Literal["off", "recommend", "auto"] = "off"
-    resource_execution: Literal["adaptive", "fixed"] = "adaptive"
-    max_concurrent: int = Field(default=2, gt=0)
-    max_failures: int = Field(default=1, ge=0)
-    calibration_seconds: float = Field(default=60, gt=0)
-    probe_ticks: int = Field(default=200, gt=0)
+    max_concurrent: int | None = Field(default=None, gt=0)
+    max_failures: int = Field(default=0, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def removed_execution_fields(cls, value):
+        removed = {"tune", "resource_execution", "calibration_seconds", "probe_ticks"}
+        if isinstance(value, dict) and removed.intersection(value):
+            raise ValueError(
+                "removed run fields: "
+                + ", ".join(sorted(removed.intersection(value)))
+                + "; all runs now use Tune; declare phase resources in a profile"
+            )
+        return value
 
     @model_validator(mode="after")
     def valid_methods(self):
-        if self.seconds is None and (
-            self.task not in {"train", "evaluate"} or self.tune != "off"
-        ):
+        if self.seconds is None and self.task not in {"train", "evaluate"}:
             raise ValueError(
-                "seconds=null supports native train/evaluate only; smoke, calibration and Tune require a finite wall budget"
+                "seconds=null supports train/evaluate; smoke and scientific calibration require a finite wall budget"
             )
         if not self.methods or len(set(self.methods)) != len(self.methods):
             raise ValueError("methods must be nonempty and unique")
@@ -699,7 +711,15 @@ class PeriodicEvaluation(Strict):
 
 class ReservationBatch(Strict):
     stage: int = Field(default=0, ge=0)
-    parallel_files: int = Field(default=1, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def removed_parallel_files(cls, value):
+        if isinstance(value, dict) and "parallel_files" in value:
+            raise ValueError(
+                "batch.parallel_files was removed; migrate its ceiling to concurrency.max_concurrent"
+            )
+        return value
 
 
 TrackingOptions = Tracking
@@ -774,29 +794,18 @@ class BaseExperiment(Strict):
         values = self.model_dump(mode="python", by_alias=True)
         for key in ("launch", "tracking", "concurrency", "resources", "display"):
             values[key] = getattr(settings, key).model_dump(mode="python")
-        values["run"].update(
-            max_concurrent=settings.concurrency.max_concurrent,
-            resource_execution="adaptive"
-            if settings.concurrency.mode == "adaptive"
-            else "fixed",
-        )
+        values["run"]["max_concurrent"] = settings.concurrency.max_concurrent
         effective = type(self).model_validate(values)
         effective._condition_inputs = self._condition_inputs
         return effective
 
     def validate_execution(self):
-        if self.concurrency.evaluation_processes > 1 and (
-            self.run.tune != "off" or self.evaluation.recovery.action != "disabled"
+        if (
+            self.concurrency.evaluation_processes > 1
+            and self.evaluation.recovery.action != "disabled"
         ):
             raise ValueError(
-                "parallel evaluation requires native execution and disabled recovery"
-            )
-        if self.resources.guard is not None and (
-            self.run.tune != "off"
-            or self.run.task not in {"train", "evaluate", "calibrate"}
-        ):
-            raise ValueError(
-                "resources.guard requires native train/evaluate/calibrate with tune=off"
+                "parallel evaluation requires disabled evaluation recovery"
             )
         return self
 
@@ -1019,10 +1028,6 @@ def parse_inputs(documents):
         }:
             raise ValueError(
                 "training sampling controls require a native PPO or DQN learner"
-            )
-        if experiment.run.tune != "off":
-            raise ValueError(
-                "training sampling currently requires native execution with tune=off"
             )
         if (
             experiment.resources.cpus is not None

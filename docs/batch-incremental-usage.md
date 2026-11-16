@@ -1,74 +1,55 @@
-# Grow a batch without overwriting prior seeds
+# Select and resume a frozen batch
 
-This behavior requires ADR0065/0066's implementation. An old run frozen under
-another source commit is not automatically upgraded: strict source identity still
-applies. Keep its results and arrange a reviewed deployment/migration first.
+The Tune migration described in [ADR0087](decisions/0087-official-tune-execution.md)
+is under engineering acceptance. Existing runs remain bound to their original
+source, dependencies and commands; no running experiment is migrated in place.
 
-A directory may contain `medium-base.yaml`, `medium-sl.yaml`, `small-base.yaml`
-and `small-sl.yaml` (Experiment schema), alongside Scenario/Algorithm files.
-The latter are not tasks. Each Experiment keeps its full authored seed list, e.g.
-`train_seeds: [4101, 4102, 4103]`.
+A directory can contain named Experiment files alongside Scenario and Algorithm
+files. Only Experiments are tasks. Keep full scientific seed lists in the authored
+files, for example `train_seeds: [4101, 4102, 4103]`, and select execution separately:
 
-```bash
-smartsom run experiments/my-batch \
+```sh
+smartsom run experiments/my-batch --profile server \
   --id medium-sl --select 'train_seeds: [4101]' \
   --id medium-base --select 'train_seeds: [4102, 4103]' \
   --output-root runs/my-batch
 ```
 
-Each `--select` binds to the preceding `--id`, once only. It is an execution
-subset, not a scientific override: full manifests, task identities and authored
-YAML stay unchanged. Only `train_seeds` is accepted. Lists mean actual values;
-an integer uses the existing YAML count semantics: `train_seeds: 3` means
-`[101, 102, 103]`, **not** the first three authored seeds. Actual seed4101 must be
-written `[4101]`, not `4101`. Every expanded value must belong to that Experiment.
-Use `--first-train-seeds 1` without local selectors for the first authored seed.
+Each `--select` binds once to the preceding `--id`. Only `train_seeds` is accepted.
+Lists specify actual seeds; an integer retains YAML count semantics (`3` expands
+to `[101, 102, 103]`). Use `[4101]` for seed 4101. Each seed must belong to the
+frozen Experiment. `--first-train-seeds 1` selects its first authored seed instead.
+Local selectors conflict with first-N and scientific seed overrides. Repeated IDs
+may select disjoint subsets; duplicate tasks or unknown IDs/seeds fail before
+allocation. Selection order identifies the manifest; Tune determines start and
+completion order. There is no task priority or `--order` control.
 
-`--id` selects entries and establishes eligible launch priority. Within each
-request, selector list order is retained; a bare ID uses the entire authored seed
-list. An ID can recur with disjoint subsets to interleave experiments. Duplicate
-tasks (including bare ID plus an overlapping subset), unknown IDs/seeds, duplicate
-YAML keys, malformed/unknown selection fields, or a select without ID are rejected
-before allocation. Local selectors conflict with `--first-train-seeds`, `--seed`
-and `--set experiment.train_seeds=...` / `experiment.run.seed=...`. First-N also
-conflicts with scientific seed overrides. There is no `--order` parameter.
+The initial selection freezes the complete inventory. Once its driver exits,
+start previously unstarted work from that same inventory:
 
-Without `--id`, every entry is selected in relative-path discovery order, with
-its authored seed order. To fill the entire directory after a subset completes:
-
-```bash
-smartsom run experiments/my-batch --resume-missing --output-root runs/my-batch
+```sh
+smartsom run experiments/my-batch --profile server \
+  --resume-missing --output-root runs/my-batch
 ```
 
-This selects from the full authored inventory, not the previous subset. Completed
-results are skipped. Training that finished but lacks final evaluation continues
-only that evaluation. Failed/interrupted training requires a compatible, intact
-continuation; missing/corrupt recovery data blocks submission instead of starting
-fresh. Active owners reject another coordinator. Manual paused/stopped/removed
-holds require explicit controls; this command never silently releases them.
+This selects the whole frozen directory, rather than only the earlier subset.
+Completed results are skipped. `--id`/`--select` can restrict the remaining work.
+A completed selection with unstarted tasks reports `partial`; preallocated task
+directories are not trained models. Results use `trials/ENTRY/seed-N` paths.
 
-New `large-base.yaml` / `large-sl.yaml` members can be added to the same directory.
-The full-directory command freezes them and fills their missing seeds too. To
-select just one new seed, combine `--resume-missing` with `--id` / `--select`.
-Changing or removing old scientific inputs, changing code/dependencies, or binding
-another authoring directory to the existing output root is rejected. Original
-`plan.json`, `manifest.json`, archives and results stay intact; additions are
-recorded in `inventory/` and the atomic control journal. Results remain under
-`trials/<experiment>/seed-<actual-seed>`.
+`--resume-missing` does not recover started trials. Use whole-run `resume` for a
+paused/interrupted execution, or `retry RUN --all` to include failed fixed trials.
+A training-complete trial with unfinished final evaluation also requires restore.
+Missing/corrupt recovery state fails explicitly. Search runs retain terminal
+failures and do not support in-place `retry`; unfinished search work uses `resume`.
 
-A single independent stage-0 Experiment can be appended to an accepting queue:
+Scientific `batch.stage` remains a dependency barrier. Tune controls admission
+and rolling replacement within each ready stage. Configure the optional trial
+concurrency ceiling and evaluation worker target before launch. Logical total
+and phase resource requests belong in the profile.
 
-```bash
-smartsom add runs/my-batch experiments/my-batch/large-base.yaml --first-train-seeds 1
-smartsom add runs/my-batch experiments/my-batch \
-  --id large-sl --select 'train_seeds: [4101]'
-```
-
-Closed queues and later stages use `run --resume-missing`. Appends join the
-existing queue tail without preempting workers. Selection across multiple owning
-batch directories is restricted to unambiguous whole-entry submissions.
-
-Order is an admission preference, not a completion guarantee. Stage barriers,
-resource limits, manual holds and runtime/UI priority remain authoritative.
-Unselected deferred seeds do not implicitly block the next selected stage, but
-previously submitted unfinished predecessors and explicit dependencies do.
+Active owners reject a competing submission. Adding/removing members or seeds,
+changing scientific configuration, source/dependencies or directory binding
+requires a new run. Online `add/close/configure/remove`, task-level controls and
+priority operations are removed. Historical inventory extensions remain readable;
+new Tune runs do not write such extensions or mutate frozen manifests.

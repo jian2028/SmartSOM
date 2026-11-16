@@ -351,15 +351,6 @@ def test_public_pty_brackets_page_and_detach_without_control_writes(
         output.clear()
         os.write(master, b"[")
         until("第 1/")
-        if command == "attach":
-            output.clear()
-            os.write(master, b"c")
-            until("输入总并发上限")
-            output.clear()
-            os.write(master, b"\r")
-            until("请输入大于 0 的整数")
-            os.write(master, b"\x1b")
-            until("? 帮助" if runtime_cards else "下一页")
         output.clear()
         os.kill(process.pid, signal.SIGINT)
         if command == "attach":
@@ -519,16 +510,9 @@ def test_unified_footer_keeps_all_context_actions_at_supported_narrow_sizes(
     help_text += text(view)
     assert ("退出菜单" if controlling else "Ctrl+C×2") in help_text
     if controlling:
-        for action in [
-            "+/- 并发",
-            "c 数值",
-            "空格 全局暂停/继续",
-            "P 暂停选中",
-            "R 恢复选中",
-            "D 移除确认",
-            "停止并保留",
-        ]:
-            assert action in help_text
+        assert "停止并保留" in help_text
+        for retired in ["+/- 并发", "c 数值", "P 暂停选中", "R 恢复选中", "D 移除确认"]:
+            assert retired not in help_text
     else:
         assert "关闭监控" in help_text and "D 移除确认" not in help_text
     view.runtime_help = False

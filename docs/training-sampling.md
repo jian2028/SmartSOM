@@ -1,132 +1,117 @@
-# Training sampling and update controls
+# Official RLlib training configuration
 
-The existing `smartsom check/run`, batch, pause/resume and evaluation commands
-remain the only entry points. These settings extend the current
-Scenario/Algorithm/Experiment contracts; no historical runtime is selectable.
+`smartsom check/run` compiles the scientific inputs and launch profile. New learning
+runs use official RLlib PPO/DQN with Tune FIFO; there is no native training fallback.
+See [ADR0098](decisions/0098-rllib-core-closeout.md) for current acceptance scope.
 
-## Experiment sampling
+## Sampling and resources
 
-```yaml
-sampling:
-  num_envs: 1
-  processes: 0
-  fragment_ticks: 256
-```
-
-The defaults retain serial sampling. For two parallel environments set both
-`num_envs` and `processes` to 2. Each worker owns an independent physical world,
-policy sampling random stream, bound rule state and reward-component state. The
-parent owns all optimizer updates. Environment count does not change role/network
-parameter sharing. Native batch admission reserves workers plus the learner;
-evaluation concurrency is a separate setting. Training sampling currently uses
-native execution (`run.tune: off`). Custom learners keep their existing serial
-contract; the new native packet-update interface is not assumed for them.
-
-`fragment_ticks` bounds the collection interval in each environment when fragment
-or transition updates are enabled. It is not a gradient batch size or an episode
-termination limit. A synchronous round waits for each active environment, combines
-its learning data in environment order, updates, then distributes new parameters.
-
-## DQN learner parameters
-
-These fields live in the existing learning policy's `learner.params`:
+Set component counts and logical resources in a profile:
 
 ```yaml
-update_trigger: episode       # episode or transitions
-update_every: 256              # new completed transitions per network
-update_amount: fixed          # fixed or ratio
-updates_per_transition: 0.125  # used only by ratio mode
-epochs: 3                     # minibatch updates per trigger in fixed mode
-batch_size: 256                # replay samples per gradient update
-target_update_interval: 100
-target_update_clock: network_gradient_steps  # or global_gradient_steps
-warmup_transitions: 0
-exploration: constant          # constant or linear
-epsilon: 0.1
-epsilon_final: 0.1
-epsilon_decay_transitions: 100000
+resources:
+  cpus: 8
+rllib:
+  resources:
+    num_cpus_for_main_process: 1
+  learners:
+    num_learners: 0
+  env_runners:
+    num_env_runners: 2
+    num_cpus_per_env_runner: 1
+  evaluation_num_env_runners: 2
+concurrency:
+  max_concurrent: 1
 ```
 
-In `episode` mode, updates are triggered when each sampled episode ends. In
-`transitions` mode, completed decisions accumulate per network; thresholds are
-checked at collection boundaries. Multiple crossed thresholds produce multiple
-fixed update allocations. `ratio` instead accrues fractional optimizer credit
-from newly inserted transitions; unused fractional credit survives checkpoints.
-It is gradient updates per new transition, not replay rows per transition.
+The Learner is local when `num_learners: 0`; the driver owns its resource request.
+MARL uses one factory per EnvRunner, with semantic agent-to-module mapping for
+shared or independent parameters. Different agents retain distinct trajectories.
+RLlib owns sample collection and updates; there is no SmartSOM synchronous wave,
+physical-time discount or update-credit scheduler. Omitted settings use the pinned
+framework defaults, recorded in the resolved configuration.
 
-Warmup counts lifetime insertions, not current replay occupancy. Data collected
-strictly below the warmup threshold do not create an optimizer backlog. Replay
-capacity still bounds retained samples. Linear exploration uses each network's
-insertion count, clamps at `epsilon_final`, and is unchanged by argmax evaluation.
+Base/SL sampling is event-driven: a production decision opens one learned WAIT
+at the end of its negotiation interval. Continuing to wait does not generate a
+new agent step at every physical tick. Physics and team costs still advance over
+every interval, and final observations retain valid bootstrap actions for all
+started agents. This reduces trajectory storage but changes official decision-step
+discounting and sample counts; see [ADR0102](decisions/0102-event-driven-learning-waits.md).
 
-Shared networks aggregate their owners' transitions. Independent networks each
-maintain their own clocks. Agent trajectories remain separate in either case.
-Automatic actions that bypass the policy do not create fictitious transitions.
-An unresolved DQN action remains with its environment until the same semantic
-subject makes its next decision. Fragment boundaries are not terminal states.
-Episode truncation retains the existing terminal/bootstrap/omitted-tail semantics.
+Training and evaluation are sequential; evaluation cases run concurrently on
+resident evaluation EnvRunners. All resident components, including idle workers,
+count toward the Tune request. Resource declarations control admission, not OS
+CPU or memory isolation. Worker counts and concurrency caps are set at launch.
+No online resizing or custom throughput calibration is performed.
 
-## PPO learner parameters
+## Algorithm parameters
+
+Start from `configs/algorithms/rllib-base-ppo.yaml` or `rllib-base-dqn.yaml`, or the
+maintained `configs/algorithms/current` research recipes. `learner.params` contains
+public `PPOConfig.training()` / `DQNConfig.training()` keyword arguments for the
+locked version. For example, a small PPO engineering check may explicitly set:
 
 ```yaml
-update_trigger: episode  # episode or fragment
-epochs: 3
-batch_size: 256
-return_estimator: gae
-gamma: 1.0
-gae_lambda: 0.95
+learner:
+  target: smartsom.learning.rllib_config.ppo_config
+  params:
+    lr: 0.0003
+    train_batch_size_per_learner: 64
+    minibatch_size: 32
+    num_epochs: 1
 ```
 
-`episode` retains complete-episode collection. `fragment` updates after each
-synchronous collection round. Returns and GAE are computed separately for every
-environment, episode and semantic subject, before combining the rows for one PPO
-update. All samples in a round use the same policy version. Nonterminal fragments
-bootstrap the critic; actual terminal episodes bootstrap zero. PPO does not use
-DQN replay ratios or exploration schedules. Existing `episode_return` remains
-selectable; fragment collection necessarily makes its nonterminal targets
-bootstrapped finite-horizon returns.
+This small batch is a correctness fixture, not a research recommendation. DQN
+uses the official loss, target updates, exploration schedule and replay; its
+supported research heads require `num_atoms: 1` and `noisy: false`. The approved
+replay state extension keeps replay inside the official checkpoint. Do not substitute
+an unrelated replay class or disable replay persistence. The artificial zero-Q
+exploration boundary remains documented in ADR0089; no custom epsilon-greedy is added.
 
-## Compatibility and evidence
+Retired native fields such as `epochs`, `batch_size`, `learning_rate`,
+`update_trigger`, update credits and target clocks are rejected. Use their official
+configuration equivalents explicitly rather than assuming identical semantics.
+The CLI convenience `--learning-rate` maps to official `lr` for the new factories.
+Nondefault native `sampling` and phase `trial_resources` settings also produce
+migration errors; use the resident component profile above.
 
-Maintained YAML files explicitly select their previous serial/episode behavior.
-Absent sampling/update fields use those same defaults. Target synchronization is
-now explicitly per-network by default as described below and in ADR0083. Historical run inputs and frozen source
-are not modified; existing runs use their original source and identity checks.
-Performance comparisons measure identical workloads, termination, decisions,
-rewards and model parameters, alternating baseline/candidate at least three times.
-Sampling throughput and total training wall time are different measurements;
-parallel sampling is not guaranteed to speed up a CPU-saturated host.
+## Evaluation and recovery
 
+PPO evaluation uses policy sampling and DQN uses its default non-exploring action
+selection. Best minimizes mean J over a complete fixed periodic panel under that
+same selection policy. Incomplete panels cannot select best. Final evaluation
+loads the selected official best/last checkpoints; the trial completes afterward.
 
-## Durable recovery boundary
+Pause, budgets and checkpoint commits use official iteration boundaries. Actual
+physical ticks/episodes can exceed the configured stopping threshold, and those
+counts are recorded. Whole-run resume uses `Tuner.restore`; it preserves the
+original finite deadline and completed results. Recovery retains official model,
+optimizer, counters and DQN replay state, without promising mid-simulation or
+bitwise RNG continuation. Native model files are not resumed across frameworks.
 
-Serial training commits after a complete episode update; parallel training commits
-a complete assigned episode wave. Pause, failure or wall-budget expiry discards
-uncommitted work and resumes from the last committed boundary. It does not resume
-a simulator midway through a fragment. Checkpoints retain optimizer/replay state,
-per-network insertion/gradient clocks, fractional credit, and each sampler's random,
-rule and reward state. Physical-tick and episode evaluation milestones shorten waves
-so their requested boundaries are not skipped. A restored wave uses the same
-configured environment count and scientific source identity.
+Historical controls and exact-wave tests are preserved in ADR0082/0083 and the
+[test migration archive](../archive/rllib-transition-tests/README.md). They do not
+specify the new framework. Representative performance evidence is reported
+separately from correctness tests and scientific conclusions.
 
-## Target synchronization and measured replay intensity
+## Historical performance optimizations
 
-DQN `target_update_clock: network_gradient_steps` (the default) synchronizes each
-network after its own `target_update_interval` optimizer steps.
-`global_gradient_steps` synchronizes configured networks after that many optimizer
-steps across all networks. Both work with shared and independent ownership and
-existing role learner overrides. Maintained YAML explicitly selects the per-network
-clock. The previous implicit mixed clock is not a supported mode. Changing modes
-is a new scientific configuration, not a live switch for a frozen run. No old
-entry point, historical checkpoint migration, or alternate experiment copy is added.
+Historical native timings are not RLlib baselines. The compatibility audit uses
+the actual final PR implementations, including rejected and superseded variants:
 
-`losses/<group>/networks/<network>` exposes cumulative `inserted_transitions`,
-`replay_size` (current occupancy), `gradient_updates`, actual `sampled_rows`,
-`target_updates` (copies after optimization, excluding initialization), and
-`replay_ratio` (sampled rows / inserted transitions; zero before any insertion).
-These values use the existing local loss and W&B logging path. Counter differences
-between committed reports give interval rates. Shared networks aggregate owners;
-independent owners remain separate. Counts survive committed checkpoint recovery.
-The ratio includes warmup insertions and counts the actual smaller batch when
-replay has fewer rows than `batch_size`; configured ratio times batch size is only
-a nominal intensity. No additional sampling or random draws are used for logging.
+| History | Current runtime treatment |
+| --- | --- |
+| PR14 transaction/replay storage; PR27 copy/projection paths | Old transaction and registered-observation paths retired in PR31, before this migration. RLlib owns current episode/replay storage; no second replay system is restored. |
+| PR22 compact inputs and PR27 A | DQN retains actor/Q inputs without PPO critic padding. PPO retains its separate public critic input. |
+| PR27 B/J deferred value and branch splitting | Official PPO `compute_values` and inference-only modules own value execution; native rollout/update scheduling is not copied. |
+| PR27 I and PR36 public facts, work estimates, routing and invariant reuse | Applicable simulator caches remain in the shared core. Same-tick changes, ordered arithmetic and extension behavior remain covered. |
+| PR27 E/L model-package and continuation serialization | Official checkpoints replace native package caching/hashing; checkpoint frequency and replay persistence remain unchanged. |
+| PR27 F/K array and diagnostic caches | Previously rejected/low-yield ideas are not enabled wholesale. Repeated progress lookup is tested using official episode `custom_data`, which survives public cut/state operations; committed counters remain in `MetricsLogger`. |
+| PR36 social tensor batching | Tested on current V2 supply packing; no gain in the representative short comparison, so the extra implementation is excluded. |
+| PR36/PR40 singleton inference shortcuts | Native-only eligibility and RNG rules are not applied to official PPO/DQN exploration or bootstrap. No learning transition is removed. |
+| PR36 parallel evaluation | Official resident evaluation EnvRunners replace the native spawn pool. |
+| PR42 flat E1a scoring and snapshot reuse | Already present in the Morris adapter and shared core. Width buckets were superseded within PR42 and are not restored. |
+
+Performance candidates are measured separately on frozen sources before combined
+acceptance. A faster short query or sampling window does not establish full-episode
+or training throughput; rejected patches and measurements remain local evidence.

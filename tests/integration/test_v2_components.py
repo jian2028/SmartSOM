@@ -12,7 +12,7 @@ from smartsom.config.base_diagnostic import BaseAlgorithm, load_inputs
 from smartsom.experiments.reservation_runtime import episode
 from smartsom.representations.v2.network import Attention
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[2] / "archive/legacy_runtime"
 
 
 @pytest.mark.parametrize("arm", ["base", "isl"])
@@ -118,6 +118,36 @@ def test_v2_derived_cache_does_not_retain_finished_request():
     del view
     gc.collect()
     assert reference() is None
+
+
+def test_service_pair_reuse_is_scoped_to_exact_candidates_and_request():
+    from types import SimpleNamespace
+
+    from smartsom.domain.base_decisions import BaseCandidate
+    from smartsom.representations.v2.facts import View
+
+    first = BaseCandidate("first", ("job_b", "agv_a"))
+    second = BaseCandidate("second", ("job_a", "agv_b"))
+    replacement = BaseCandidate("replacement", ("job_a", "agv_c"))
+    calls = []
+
+    def pair(job, candidates):
+        calls.append(job)
+        return next(c for c in candidates if c.action[0] == job), 0
+
+    def fresh():
+        result = View(SimpleNamespace(scales=(1, 1, 1)))
+        result.pair = pair
+        return result
+
+    view = fresh()
+    for _ in range(6):
+        assert view.service_pairs((first, second)) == (second, first)
+    assert calls == ["job_a", "job_b"]
+    assert view.service_pairs((first, replacement)) == (replacement, first)
+    assert calls == ["job_a", "job_b"] * 2
+    assert fresh().service_pairs((first, second)) == (second, first)
+    assert calls == ["job_a", "job_b"] * 3
 
 
 def test_v2_freezes_pickup_while_delivery_learns():

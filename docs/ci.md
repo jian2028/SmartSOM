@@ -17,9 +17,10 @@ it does not promote a roadmap milestone or establish research performance.
    platform slices. Native Windows is outside this CI maintenance scope.
    High-impact or uncertain PR changes also select full verification.
 
-Current learning owners execute the native PPO/DQN and Base/SL contracts.
-Retired RLlib/SB3/CP contracts live with their historical source and are not
-counted as current acceptance. Real native/Ray pause and continuation, frozen
+Current tuning/public owners execute RLlib/Tune PPO/DQN and lifecycle contracts.
+Retained native-internal regression tests are historical implementation checks,
+not evidence of RLlib migration. Retired phase/lifecycle tests have an explicit
+[contract mapping](../archive/rllib-transition-tests/README.md). Real Ray pause and continuation, frozen
 case receipts, ownership and cleanup checks remain distinct from mocked control
 unit tests. No wall-time completion guarantee is made.
 
@@ -49,12 +50,18 @@ The owners are:
 - `fast`: lean core, configuration, CLI and native scheduler contracts
 - `gym`: minimal centralized Gym adapter
 - `learning`: native extensions, train/eval and complete checkpoint lifecycle
-- `tuning`: measured calibration, Ray continuation, pause/restore and actor failure safety
+- `tuning`: resident RLlib/Tune resources, search, continuation and actor failure safety
 - `resource-learning`: Base/SL native PPO and DQN state equivalence
 - `usability`: real offline W&B and TensorBoard event/RNG acceptance
 - `studio`: offscreen Qt authoring and current read-only playback
-- `learning-public`: native calibration, evaluation receipts and real worker control
+- `learning-public`: scientific calibration and real whole-run CLI control
 - `control`, `macos-learning`, `diagnostics`: explicit cross-platform repetitions of shared control, checkpoint and native learning contracts.
+
+The `macos-learning` slice additionally runs representative official PPO and DQN
+SL-attention sampling, updates and checkpoint continuation, plus the Morris
+public CLI, fixed panels and best/last recovery tests. These are CPU functional
+checks, not GPU or long-training performance acceptance. The Morris fixture
+reserves two logical CPUs for its driver and evaluation worker.
 
 All native macOS slices use ARM `macos-latest` (three CPUs, 7 GB RAM), which
 supports the locked Torch stack. Intel installation fails because Torch 2.14.0
@@ -74,52 +81,19 @@ Later ARM failure snapshots were polluted by orphan workers and do not establish
 hardware as the cause of every delay. Hosted ARM success still requires a fresh
 full CI run; local Apple Silicon evidence is reported separately.
 
-Tuning additionally qualifies the host before pytest, using the unchanged
-performance-mode resource broker and requiring three consecutive five-second
-samples with at least 2.25 available CPUs after the application's reserve and
-external load. This accounts for two one-thread native learners plus observer
-headroom. Qualification has a ten-minute bound and fails closed. The main-run
-38351590310 failure recorded 22 pressure park/release cycles and no observed
-two-running-learner overlap, despite genuine commits; its raw capacity repeatedly
-fell below two CPUs. Selector isolation releases prior framework state and host
-qualification avoids starting this acceptance with insufficient capacity.
-Neither changes application admission, the real 240-second/controlled
-180-second guards, learner budgets or required overlap/restore/cleanup proofs.
-Passing the repaired hosted run remains the acceptance gate.
+Native owners can use `--qualify-host` before pytest. The CI-only sampler requires
+three consecutive five-second samples and has a ten-minute limit. Its retained
+CPU and memory headroom thresholds qualify the test host; they do not alter Tune
+resources or implement an application resource guard. Qualification failure is a
+failure, not a skip or a test retry.
 
-The separate native Tune pause/hold/resume acceptance keeps its 32 real updates,
-checkpoint identity checks and two genuine actor pauses. Its final resume now
-uses a 360-second hard limit and fails after 60 seconds without a new durable
-batch commit. Two unchanged local DQN repetitions took 236.95 and 235.53 seconds
-from that resume to normal exit, leaving only 3–4 seconds under the former
-240-second wait. Observed durable commit gaps, including the final evaluation, stayed below
-17 seconds; exit after the final commit also fit inside the stall limit. These measurements establish a
-narrow acceptance margin, not the exact phase of the earlier hosted timeouts.
-The second repetition initially waited for RAM; its final-resume measurement
-excludes that initial admission delay. No resource guard or training input changes.
-Restored counters are baselined before resume. Only increasing integer update
-counts, bounded by the frozen training budget and matching physical ticks, reset
-the stall clock; timestamps, stage changes and replayed counters cannot extend it.
-The bounded `deadline-summary.json` records commits and final native/admission
-observations before cooperative failure cleanup. Normal exit still must satisfy
-all completion, checkpoint, progress and resource-release assertions. The separate
-online lifecycle 240/180-second guards remain unchanged.
-
-The macOS learning owner additionally uses `--qualify-host` after dependencies/preflight
-and before pytest execution. It reads the unchanged balanced broker capacity and
-requires three consecutive five-second samples with at least 1.25 free CPUs and
-256 MiB above its normal RAM reserve. This qualifies room for one training thread
-plus the measured test observer; it does not alter the application's reserve or
-ignore aggregate CPU. An unprimed CPU sample is never sufficient. Qualification
-has a ten-minute bound and logs every observed input; timeout fails the owner,
-never skips tests or turns missing execution into success. The configurable public checkpoint/stop deadlines remain 180/60 seconds. Its
-fresh resume uses a monotonic 480-second hard limit and fails after 120 seconds
-without new bounded training/update/validation/evaluation counters. Replayed
-counters, stage/status changes, resource samples and timestamps cannot refresh
-that watchdog; each validation round has its own tick maximum. The interrupted
-snapshot is baselined before waiting. Scientific budgets and completion/cleanup
-assertions are unchanged. This is deadline qualification, not a throughput claim. No test retry, runner service termination,
-dependency downgrade or resource reading override is used.
+The Tune migration replaces broker/lease and online resizing acceptance with
+stock-controller cohorts, simultaneous resident evaluation, full checkpoint
+restore, whole-run pause, nested worker cleanup and Optuna state tests. Their
+small scientific workloads establish correctness only. The separate development
+performance gate requires fixed workloads, alternating repetitions and both
+steady and end-to-end comparisons. Historical native scheduler timing evidence
+does not establish acceptance of this implementation.
 
 Public command observers with an inherited PID/birth journal scan the host at
 four Hz, retaining independent child-generation registration and an immediate
@@ -133,15 +107,6 @@ their public stdout/stderr, observer/deadline summaries and progress snapshots.
 The existing 128-file, 256-KiB/file, 8-MiB payload and 20,000-entry scan limits remain;
 checkpoint blobs and symlinks are excluded. Oversized stdout/stderr retain only a
 bounded tail, labelled with original size and offset in the staging manifest.
-Online lifecycle fixtures additionally publish a rolling cached-observation
-snapshot (at most256 KiB, normally once per second), retaining bounded commit,
-park/release/restore tails, raw admission budgets, lease/owner generations and
-overlap/stop state before Tune returns. Deadline and owned-exit records survive
-emergency cleanup. These files, restore journals and stop requests are included in
-the existing bounded diagnostic whitelist; the real240-second and controlled
-180-second guards, host monitor, CPU/RAM reserves and acceptance assertions remain
-unchanged. Synthetic snapshot-writer tests are not live concurrency evidence.
-
 Installing PySide6 and using offscreen Qt establishes automated UI contracts, not
 real-window interaction acceptance. Linux path emulation is not native macOS
 qualification. Native Windows is no longer maintained or qualified by this CI;
@@ -149,27 +114,15 @@ pre-existing Windows compatibility code and tests remain unchanged. Portable tes
 still execute on supported platforms, with only exact, documented unsupported-OS
 skip allowances. Keeping historical Windows cases is not a claim that they execute
 on Linux or that Windows compatibility has been verified. CPU smoke tests do not
-establish CUDA/H20 performance. The bounded real-clock test checks elapsed-time lifecycle qualification; neither it nor the
-controlled-clock companion measures unmodified hardware throughput.
+establish CUDA/H20 performance. Correctness tests do not establish unmodified hardware throughput.
 
 ## Local reproduction
 
-The fast owner's real native matrix concurrency test requires a host with at
-least four CPUs. This public repository's `ubuntu-latest` job supplies four CPUs
-and 16 GB RAM under [GitHub's standard runner specification](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-Two-CPU private-repository runners are not sufficient for this real parallel
-acceptance; provision adequate capacity rather than bypassing admission or skipping it.
-Before starting workers it uses the same fail-closed performance
-host qualifier as Tune, requiring three consecutive five-second samples with
-2.25 free CPUs after the broker reserve and 1 GiB above the unchanged shared
-native memory reserve (at least 2 GiB or 20% of host RAM). A host exposing fewer than 3.25 CPUs
-fails immediately; temporary pressure has a 180-second qualification bound.
-Insufficient capacity is a failure, never a skip or a changed admission reading.
-The test retains 500 real evaluation cases and checks live worker identities,
-new durable receipts and draining without restarting workers. Dispatch,
-steady-state progress and cleanup each retain 45-second bounds; initialization
-and first receipts have a separate 180-second bound because each worker validates
-and freezes the full case inventory before publishing its first receipt.
+Run resource-owning tests on a host with the declared CPU and memory capacity.
+The real Tune phase tests declare three CPUs, including coordinator and nested
+workers; insufficient resources must not be bypassed by changing scientific
+inputs or suppressing required tests. Do not run performance comparisons beside
+other test suites.
 
 Run from the repository root with the pinned Python 3.12 and uv 0.12.22. Planning
 uses the standard library; execution syncs the exact locked extras for its owner.

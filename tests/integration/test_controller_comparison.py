@@ -1,4 +1,7 @@
-"""Central/Justin adapters share the current entry, rules, worlds and physics."""
+"""Historical comparator regression contracts; Justin smoke remains public.
+
+Native internal checks are not evidence of RLlib comparator migration.
+"""
 
 import copy
 import importlib
@@ -18,7 +21,7 @@ from smartsom.domain.observation_data import vector
 from smartsom.domain.public_facts import freeze
 from smartsom.experiments.reservation_runtime import episode
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[2] / "archive/legacy_runtime"
 STUDY = None
 
 
@@ -405,9 +408,9 @@ def test_justin_wip_preferences_normal_mode_and_default_acceptance():
     assert policy.choose(acceptance) == BaseRule().choose(acceptance)
 
 
-def test_batch_first_wave_contains_one_learning_seed_and_one_rule_evaluation():
+def test_historical_batch_selection_preserves_learning_and_rule_inventory():
+    from smartsom.experiments.author_batch import compile_directory
     from smartsom.experiments.cli import _parser
-    from smartsom.experiments.launch import compile_launch
 
     args = _parser().parse_args(
         [
@@ -421,7 +424,7 @@ def test_batch_first_wave_contains_one_learning_seed_and_one_rule_evaluation():
             "medium-justin",
         ]
     )
-    plan = compile_launch(STUDY, ids=args.batch_ids, selectors=args.batch_selectors)
+    plan = compile_directory(STUDY, ids=args.batch_ids, selectors=args.batch_selectors)
     assert len(plan.files) == 8
     selected = [row for row in plan.files if row["id"] in plan.selection["tasks"]]
     assert len(selected) == 2
@@ -468,12 +471,12 @@ def test_central_uses_native_session_transactions_and_restores_completed_budget(
         restored.close()
 
 
-def test_public_smoke_entry_executes_central_and_justin(tmp_path):
+def test_public_smoke_entry_executes_justin(tmp_path):
     import json
 
     from smartsom.experiments import reservation
 
-    for method in ("central-ppo", "justin"):
+    for method in ("justin",):
         output = tmp_path / method
         plan = compile_reservation(
             STUDY / f"small-{method}.yaml",
@@ -483,7 +486,6 @@ def test_public_smoke_entry_executes_central_and_justin(tmp_path):
                 "experiment.final_evaluation=false",
                 "experiment.run.smoke_ticks=5",
                 "experiment.run.seconds=60",
-                "experiment.resources.guard=null",
                 "experiment.tracking.mode=disabled",
                 f'experiment.run.output="{output}"',
             ],
@@ -494,7 +496,7 @@ def test_public_smoke_entry_executes_central_and_justin(tmp_path):
         assert result["status"] == "completed"
         rows = json.loads((output / "summary.json").read_text())["results"]
         assert len(rows) == 1 and rows[0]["tick"] == 5
-        assert (output / "last.pt").exists() == (method == "central-ppo")
+        assert not (output / "last.pt").exists()
 
 
 def test_tracking_uses_central_ownership_not_reservation_protocol(tmp_path):
@@ -516,8 +518,9 @@ def test_tracking_uses_central_ownership_not_reservation_protocol(tmp_path):
         assert torch.equal(state, torch.get_rng_state())
 
 
-def test_cli_resume_continues_an_incomplete_central_session(tmp_path, monkeypatch):
-    import json
+def test_public_resume_rejects_native_checkpoint_without_modifying_artifacts(
+    tmp_path, monkeypatch
+):
     import subprocess
     import sys
 
@@ -543,9 +546,16 @@ def test_cli_resume_continues_an_incomplete_central_session(tmp_path, monkeypatc
     progress = session.step()
     assert not progress["done"] and session.ticks == 10
     assert progress["network_count"] == 1 and progress["model_parameters"] > 0
-    updates = session.policy.updates
-    first = json.loads((root / "continuation/current.json").read_text())["generation"]
     session.close()
+    saved = {
+        p: p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file()
+        and (
+            p.name in {"episodes.jsonl", "progress.json", "manifest.json", "last.pt"}
+            or "continuation" in p.parts
+        )
+    }
     result = subprocess.run(
         [
             sys.executable,
@@ -561,15 +571,9 @@ def test_cli_resume_continues_an_incomplete_central_session(tmp_path, monkeypatc
         text=True,
         timeout=60,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    progress = json.loads((root / "progress.json").read_text())
-    assert progress["status"] == "completed" and progress["physical_ticks"] == 20
-    assert progress["episodes"] == 2 and progress["updates"] > updates
-    assert (
-        json.loads((root / "continuation/current.json").read_text())["generation"]
-        != first
-    )
-    assert len((root / "episodes.jsonl").read_text().splitlines()) == 2
+    assert result.returncode != 0
+    assert "native checkpoints" in result.stdout + result.stderr
+    assert all(p.read_bytes() == content for p, content in saved.items())
 
 
 def test_real_multistage_next_rollout_and_update_survive_state_transfer():
@@ -608,15 +612,15 @@ def test_real_multistage_next_rollout_and_update_survive_state_transfer():
         assert torch.equal(value, restored.learner.model.state_dict()[key])
 
 
-def test_current_isl_matrix_has_twenty_tasks_and_identical_pinned_worlds():
+def test_historical_isl_inventory_preserves_twenty_tasks_and_pinned_worlds():
     from collections import Counter
 
     from smartsom.config.codec import digest
     from smartsom.config.evaluation_cases import experiment_panels
-    from smartsom.experiments.launch import compile_launch
+    from smartsom.experiments.author_batch import compile_directory
 
     study = ROOT / "experiments/implicit-sl"
-    plan = compile_launch(study)
+    plan = compile_directory(study)
     assert len(plan.files) == 20
     assert Counter(r["compiled"].experiment.run.task for r in plan.files) == {
         "train": 18,

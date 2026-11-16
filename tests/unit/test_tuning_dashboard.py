@@ -139,6 +139,8 @@ def test_live_resource_notes_do_not_move_trial_cards_or_change_page_bounds(
         for e in state["entries"]:
             e["calibration_group"] = "g"
     view.configure_tuning(state)
+    view.controlling = True
+    assert "c 修改总并发" not in plain(view)
 
     def geometry():
         text = plain(view).splitlines()
@@ -657,7 +659,7 @@ def test_noninteractive_runtime_summary_includes_control_and_blocking_facts():
     assert "自适应上限 6" in text
     assert "实际运行 2" in text
     assert "insufficient memory" in text
-    assert "只读 monitor" in text
+    assert "只读资源观测" in text
 
 
 def test_runtime_remove_waits_for_tombstone_and_details_preserve_geometry():
@@ -956,45 +958,6 @@ def test_pause_feedback_is_fixed_visible_and_truthful_through_wait_and_failure(
     detail = "\n".join(runtime_feedback_detail(view))
     assert "结果 failed" in detail and "自然完成 1（非已暂停）" in detail
     assert "冻结目标 3" in detail
-
-
-def test_feedback_local_submission_survives_delayed_snapshot_and_frame_clock(
-    monkeypatch,
-):
-    from smartsom.telemetry.monitor import _remember_control
-    from smartsom.telemetry.tuning_dashboard import (
-        pending_pause,
-        runtime_feedback_lines,
-    )
-
-    view = display(80, 24, count=1)
-    view.configure_tuning(
-        {"runtime_control": {"status": "running", "paused": True, "commands": {}}}
-    )
-    receipt = {"id": "pending", "status": "received", "revision": 1}
-    _remember_control(view, receipt, "pause")
-    assert pending_pause(view)["id"] == "pending"
-    assert "已收到" in runtime_feedback_lines(view)[0]
-    state = {
-        "status": "running",
-        "commands": {
-            "pending": {
-                **receipt,
-                "payload": {"kind": "pause", "task_id": None},
-                "status": "applied",
-                "progress": {"state": "waiting"},
-            }
-        },
-    }
-    view.configure_tuning({"runtime_control": state})
-    monkeypatch.setattr("smartsom.telemetry.runtime.time.monotonic", lambda: 10)
-    before = view._frame_state()
-    monkeypatch.setattr("smartsom.telemetry.runtime.time.monotonic", lambda: 11)
-    assert view._frame_state() != before
-    state["commands"]["pending"]["progress"]["state"] = "completed"
-    view.configure_tuning({"runtime_control": state})
-    assert pending_pause(view) is None
-    assert "实际请求已落实" in runtime_feedback_lines(view)[0]
 
 
 @pytest.mark.parametrize("width,height", [(60, 24), (80, 24), (160, 50)])

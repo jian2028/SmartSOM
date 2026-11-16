@@ -105,7 +105,7 @@ def render(view):
                 for line in performance_lines(view.tuning, condensed=True)
             ],
         ]
-    from smartsom.telemetry.tuning_dashboard import control_footer, runtime_lines
+    from smartsom.telemetry.tuning_dashboard import runtime_lines
 
     if (view.tuning or {}).get("runtime_control"):
         header.extend(
@@ -138,8 +138,7 @@ def render(view):
         title="当前阶段 · 规则对照"
         if view.stage.startswith("stage_")
         else "批次状态与结果",
-        footer=control_footer(view, view.tuning or {})
-        + (
+        footer=(
             "q / Ctrl+C 退出菜单 · d 仅离开界面"
             if view.controlling
             else "d 离开界面 · Ctrl+C×2 关闭监控"

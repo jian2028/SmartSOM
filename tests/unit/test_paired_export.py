@@ -815,54 +815,6 @@ def test_controlled_recovery_window_conflicts_are_rejected():
     )
 
 
-def test_official_experiment_evaluation_uses_yaml_window_settings(tmp_path):
-    from pathlib import Path
-
-    from smartsom import api
-
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "experiments/examples/small/default/experiment.yaml"
-    )
-    root = tmp_path / "evaluation"
-    result = api.run_experiment(
-        source,
-        task="evaluate",
-        sets=[
-            f'experiment.run.output="{root}"',
-            "experiment.run.methods=[rule]",
-            "experiment.tracking.mode=disabled",
-            "scenario.jobs.orders.total=8",
-            "scenario.jobs.orders.initial=4",
-            "scenario.jobs.arrivals.mean_interval_ticks=4",
-            "experiment.run.metrics=detailed",
-            "experiment.run.metric_interval=10",
-            "experiment.periodic_evaluation_cases=4",
-            "experiment.drain_ticks=100",
-            "experiment.drain_frozen=true",
-            "experiment.run.seconds=60",
-            "experiment.evaluation.window_analysis={throughput_width_ticks: 100, throughput_step_ticks: 100, recovery_window_ticks: 100, same_run: {mode: manual, warmup_end_tick: 0, baseline_windows: 2, fraction: 0.95, consecutive_windows: 2, duration_from: repair, maximum_fault_events: 10}}",
-        ],
-    )
-    assert result["status"] == "completed"
-    row = json.loads(next(root.rglob("cases.jsonl")).read_text().splitlines()[0])
-    assert row["research_metrics"]["sample_interval_ticks"] == 10
-    assert row["window_analysis"]["width_ticks"] == 100
-    assert row["window_analysis"]["recovery_window_ticks"] == 100
-    assert row["window_analysis"]["status"] == "observed"
-    same_run = row["window_analysis"]["same_run_recovery"]
-    assert same_run["settings"]["mode"] == "manual"
-    assert same_run["sample_window_ticks"] == 10
-    assert row["window_analysis"]["windows"]
-    for window in row["window_analysis"]["windows"]:
-        expected = sum(
-            o["completion_tick"] is not None
-            and window["start"] < o["completion_tick"] <= window["end"]
-            for o in row["research_metrics"]["orders"]
-        )
-        assert window["completed"] == expected
-
-
 def test_real_simulator_cases_flow_into_paired_export(tmp_path):
     """Actual simulated decisions/events, with explicitly synthetic test identity."""
     from dataclasses import replace

@@ -116,7 +116,41 @@ def candidate_facts(facts, request):
 
 def create_observation():
     def observe(facts, request):
-        return {"candidates": candidate_facts(facts, request)}
+        result = {"candidates": candidate_facts(facts, request)}
+        if request.group == "machine":
+            # Only the fixed Rule needs this estimate. Generic named-rule
+            # projection and learned observations retain their existing work.
+            jobs = {}
+            for candidate in request.candidates:
+                job = candidate.action[0]
+                if job in jobs:
+                    continue
+                row = facts.jobs[job]
+                demand = facts.demands[row["demand"]]
+                normal = facts.nominal(job, request.owner, "normal")
+                remaining = normal + sum(
+                    min(
+                        max(
+                            1,
+                            math.ceil(
+                                float(step.work_ticks_on(machine))
+                                / float(spec.processing_rate_multiplier)
+                            ),
+                        )
+                        for machine, spec in facts.machines.items()
+                        if step.operation_type in spec.operation_types
+                    )
+                    for step in demand.steps[row["step"] + 1 :]
+                )
+                # Base requires normal time_scale=1. Future capability is public;
+                # future queues, outages and sampled processing times are not used.
+                jobs[job] = {
+                    "due_ticks": demand.due_at - facts.tick,
+                    "normal_ticks": normal,
+                    "remaining_normal_ticks": remaining,
+                }
+            result["machine_jobs"] = jobs
+        return result
 
     return observe
 

@@ -442,7 +442,7 @@ def test_real_detached_child_continues_after_launcher_exits(root, tmp_path):
         "import json, os, sys, time\n"
         "from smartsom.experiments.control import write_json\n"
         "from smartsom.telemetry.runtime import CURRENT\n"
-        "def execute_saved(root, max_concurrent=None):\n"
+        "def execute_saved(root, *, retry_failed=False):\n"
         "    write_json(root / 'probe.json', {'pid': os.getpid(), 'session': os.getsid(0),\n"
         "        'stdin': sys.stdin.read(), 'stdout_tty': sys.stdout.isatty(),\n"
         "        'stderr_tty': sys.stderr.isatty(), 'progress': CURRENT.get().options.progress})\n"

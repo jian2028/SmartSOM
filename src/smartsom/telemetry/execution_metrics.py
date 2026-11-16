@@ -404,7 +404,7 @@ class ExecutionTelemetry:
         rate = self.throughput.sample(tasks, now, wall_time=wall_time)
         if self.resource_sample_at is None or now - self.resource_sample_at >= 1:
             try:
-                from smartsom.experiments.tuning_resources import ResourceMonitor
+                from smartsom.telemetry.system_resources import ResourceMonitor
 
                 if self.resource_monitor is None:
                     self.resource_monitor = ResourceMonitor()

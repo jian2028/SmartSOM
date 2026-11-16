@@ -20,7 +20,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from smartsom._filesystem import atomic_replace, native_path, read_text
-from smartsom.experiments.resource_guard import check as check_resources
 
 CURRENT = ContextVar("smartsom_control", default=None)
 ACTIVE = {"running", "stop_requested", "stopping"}
@@ -295,7 +294,6 @@ def requested(root=None, *, fresh=False):
 
 
 def boundary(root=None, *, fresh=False):
-    check_resources()
     stopping = requested(root, fresh=True) if fresh else requested(root)
     if stopping:
         raise StopRequested("stop requested at a safe boundary")
@@ -428,11 +426,8 @@ class Scope:
         with self.guard:
             if root in self.roots:
                 return
-        from smartsom.experiments.queue_admission import registration
-
         with registration_lock(root, wait=True):
-            with registration(root):
-                self._bind(root)
+            self._bind(root)
 
     def _bind(self, root):
         with self.guard:

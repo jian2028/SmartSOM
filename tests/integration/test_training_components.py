@@ -14,7 +14,7 @@ from smartsom.domain.training import LearningContext, RewardTimeline
 from smartsom.experiments.reservation_runtime import episode
 from smartsom.learning.returns import prepare_returns
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[2] / "archive/legacy_runtime"
 
 
 def configuration(method):

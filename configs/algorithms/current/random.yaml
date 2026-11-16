@@ -1,0 +1,35 @@
+schema: smartsom.algorithm-components/v2
+control: base
+decision_protocol:
+  auto_accept_uncontested: true
+  pre:
+    accept:
+      allow_stop: false
+  post:
+    accept:
+      allow_stop: false
+  dispatcher:
+    pickup:
+      allow_empty_wait: false
+  reevaluate_ticks: 10
+  time_scale: 200.0
+  distance_scale: 50.0
+  count_scale: 20.0
+  quality_penalty: 1000.0
+production:
+  default: random
+  bindings: {}
+  policies:
+    random:
+      kind: policy
+      implementation:
+        target: smartsom.policies.random.create_policy
+      observation:
+        target: smartsom.observations.rules.create_random_observation
+action_representation:
+  default: direct
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover
+reward:
+  target: smartsom.rewards.default.create_reward

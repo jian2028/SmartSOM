@@ -333,7 +333,9 @@ def test_completion_at_fault_and_same_machine_continuation():
         wait(sim)
     assert {j for j, _ in sim.machine_choices("machine_00")} == {job}
     decide(sim)
-    assert sim.machine_state["machine_00"]["mode"] == "normal"
+    # The due date is now reached with two operations left: the composite Rule
+    # chooses fast while preserving the same-machine continuation boundary.
+    assert sim.machine_state["machine_00"]["mode"] == "fast"
     assert sim.protocol.metrics["machine_choices"] == 2
 
 

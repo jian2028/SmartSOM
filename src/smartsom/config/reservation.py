@@ -126,7 +126,10 @@ def compile_reservation(
         return data
 
     documents = {"experiment": read("experiment", path)}
-    if documents["experiment"].get("schema") == "smartsom.resolved-experiment/v1":
+    resolved_snapshot = (
+        documents["experiment"].get("schema") == "smartsom.resolved-experiment/v1"
+    )
+    if resolved_snapshot:
         # Recompile a current frozen snapshot through its authored Scenario.
         # Expanded runtime files are never accepted as historical authoring.
         document = documents["experiment"]
@@ -171,8 +174,18 @@ def compile_reservation(
         ]
         if len(names) != 1:
             raise ConfigurationError("--learning-rate requires one configured learner")
+        target = policies[names[0]]["learner"].get("target")
+        parameter = (
+            "lr"
+            if target
+            in {
+                "smartsom.learning.rllib_config.ppo_config",
+                "smartsom.learning.rllib_config.dqn_config",
+            }
+            else "learning_rate"
+        )
         sets += (
-            f"algorithm.production.policies.{names[0]}.learner.params.learning_rate={learning_rate}",
+            f"algorithm.production.policies.{names[0]}.learner.params.{parameter}={learning_rate}",
         )
     for item in sets:
         key, separator, raw = item.partition("=")
@@ -200,6 +213,11 @@ def compile_reservation(
             if not isinstance(node, dict):
                 raise ConfigurationError(f"override parent is not a mapping: {key}")
         node[names[-1]] = safe_yaml_load(raw)
+    if not resolved_snapshot and "resources" in documents["experiment"]:
+        raise ConfigurationError(
+            "resources belongs in an execution profile, not experiment YAML; "
+            "use --profile for the total logical budget"
+        )
     from smartsom.config.scenario_authoring import expand_documents
 
     scene_snapshot = safe_yaml_dump(documents["scenario"], sort_keys=False).encode()
@@ -220,9 +238,6 @@ def compile_reservation(
     for key in ("launch", "tracking", "concurrency", "resources", "display"):
         ex[key] = execution[key]
     run["max_concurrent"] = execution["concurrency"]["max_concurrent"]
-    run["resource_execution"] = (
-        "adaptive" if execution["concurrency"]["mode"] == "adaptive" else "fixed"
-    )
     if execution["output_root"]:
         explicit_output = any(
             item.startswith("experiment.run.output=") for item in sets
@@ -230,7 +245,9 @@ def compile_reservation(
         name = Path(run["output"]).name if explicit_output else path.stem
         run["output"] = str(Path(execution["output_root"]).resolve() / name)
     if tuning is not None:
-        run["tune"] = tuning
+        raise ConfigurationError(
+            "--tune was removed; all runs use Tune; use --search for Optuna"
+        )
     for name in ("output", "calibration", "checkpoint"):
         if run.get(name):
             run[name] = str((path.parent / Path(run[name]).expanduser()).resolve())
@@ -444,6 +461,105 @@ def compile_reservation(
     if scene_snapshot is not None:
         components += (("authoring/scenario.yaml", scene_snapshot),)
     experiment, factory, workload, algorithm = parse_inputs(documents)
+    from smartsom.config.trial_resources import TrialResources, check_capacity
+
+    phase_resources = TrialResources.model_validate(execution["trial_resources"])
+    eval_workers = min(
+        experiment.concurrency.evaluation_processes,
+        experiment.concurrency.evaluation_cpus
+        or experiment.concurrency.evaluation_processes,
+    )
+    policy = algorithm.learning_policy
+    rllib_method = {
+        "smartsom.learning.rllib_config.ppo_config": "ppo",
+        "smartsom.learning.rllib_config.dqn_config": "dqn",
+    }.get(policy.learner.target if policy is not None else None)
+    scientific_task = experiment.run.task in {"calibrate", "evaluate"} or (
+        experiment.run.task == "smoke"
+        and not any(
+            method in {"ppo", "dqn"}
+            or (method == "configured" and uses_learning(algorithm))
+            for method in experiment.run.methods
+        )
+    )
+    if rllib_method is not None or scientific_task:
+        from smartsom.config.rllib_resources import RLlibResources
+
+        if phase_resources != TrialResources():
+            raise ConfigurationError(
+                "phase trial_resources were retired; use profile rllib resources"
+            )
+        resident = RLlibResources.model_validate(execution.get("rllib", {}))
+        bundles = (
+            resident.scientific_task_bundles(
+                evaluation_workers=resident.panel_workers(experiment.concurrency)
+                if experiment.run.task == "evaluate"
+                else 0
+            )
+            if scientific_task
+            else resident.declared_bundles(
+                algorithm=rllib_method,
+                evaluation_workers=(resident.evaluation_num_env_runners or eval_workers)
+                if experiment.run.task == "train"
+                and (
+                    experiment.periodic_evaluation.milestones
+                    or experiment.final_evaluation
+                )
+                else 0,
+            )
+        )
+        capacity = {
+            name: execution["resources"][key]
+            for name, key in (
+                ("CPU", "cpus"),
+                ("GPU", "gpus"),
+                ("smartsom_memory_gib", "memory_gib"),
+            )
+            if execution["resources"].get(key) is not None
+        }
+        memory = [bundle.get("smartsom_memory_gib") for bundle in bundles]
+        if "smartsom_memory_gib" in capacity and not all(memory):
+            raise ConfigurationError(
+                "total memory budget requires memory_gib for every resident component"
+            )
+        if "smartsom_memory_gib" not in capacity and any(memory):
+            raise ConfigurationError(
+                "component memory declarations require profile resources.memory_gib"
+            )
+        check_capacity(
+            [
+                {
+                    key: value
+                    for key, value in bundle.items()
+                    if key in capacity or key == "GPU"
+                }
+                for bundle in bundles
+            ],
+            capacity,
+        )
+    else:
+        for phase, workers in (
+            ("training", experiment.sampling.processes),
+            ("evaluation", eval_workers if eval_workers > 1 else 0),
+        ):
+            bundles = phase_resources.bundles(phase, workers=workers)
+            capacity = {
+                name: execution["resources"][key] * factor
+                for name, key, factor in (
+                    ("CPU", "cpus", 1),
+                    ("GPU", "gpus", 1),
+                    ("memory", "memory_gib", 1024**3),
+                )
+                if execution["resources"].get(key) is not None
+            }
+            check_capacity(
+                [
+                    {key: value for key, value in bundle.items() if key in capacity}
+                    for bundle in bundles
+                ],
+                capacity,
+            )
+
     if (
         experiment.evaluation.recovery.action != "disabled"
         and experiment.run.task not in ("calibrate", "evaluate")
@@ -473,13 +589,11 @@ def compile_reservation(
         raise ConfigurationError(
             "centralized methods must be rule, random or configured"
         )
-    if r.tune != "off" and (
+    if r.task == "train" and (
         not experiment.train_seeds
         or len(set(experiment.train_seeds)) != len(experiment.train_seeds)
     ):
         raise ConfigurationError("Tune requires nonempty unique train_seeds")
-    if r.tune != "off" and r.task != "train":
-        raise ConfigurationError("Tune requires a learning train task")
     if not factory.agvs:
         raise ConfigurationError("reservation execution requires at least one AGV")
     from smartsom.config.base_diagnostic import generate_scenario
@@ -554,6 +668,11 @@ def compile_reservation(
 
 def calibration_identity(paths):
     """Execution paths/budgets do not alter calibrated factory/workload semantics."""
+    return hashlib.sha256(calibration_identity_payload(paths)).hexdigest()
+
+
+def calibration_identity_payload(paths):
+    """Exact original identity bytes, also retainable for derived search evidence."""
     if "scenario" in paths:
         from smartsom.config.codec import primitive
         from smartsom.config.scenario_authoring import load_scene
@@ -585,4 +704,4 @@ def calibration_identity(paths):
     values["initial_drain_ticks"] = read_document(paths["experiment"]).get(
         "drain_ticks", 2000
     )
-    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+    return json.dumps(values, sort_keys=True).encode()

@@ -1,25 +1,21 @@
-"""Frozen current experiment directories, scheduled by the shared NativeScheduler."""
+"""Frozen current experiment directories, scheduled by official Ray Tune."""
 
 import json
-import time
-from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 
 from smartsom.config.codec import ConfigurationError, digest
-from smartsom.experiments.control import requested
 from smartsom.experiments.evidence import (
     implementation_identity,
     runtime_source_matches,
     source_identity,
     write_json,
 )
-from smartsom.telemetry.runtime import CURRENT, bind, operation
+from smartsom.telemetry.runtime import CURRENT, operation
 
 SCHEMA = "smartsom.author-batch-plan/v1"
 STATE_SCHEMA = "smartsom.author-batch-state/v1"
 RUN_SCHEMA = "smartsom.author-batch-run/v1"
-CALIBRATION_SECONDS = {"online": 0, "off": 0, "quick": 5 * 60, "full": 30 * 60}
 FINAL = {"completed", "failed", "stopped"}
 
 
@@ -28,9 +24,6 @@ class DirectoryPlan:
     directory: Path
     files: tuple
     output_root: Path
-    calibration_seconds: float
-    calibration_level: str = "off"
-    calibration_candidate: str = "latest"
     selection: dict | None = None
     contract: str = "reservation"
     operations: dict | None = None
@@ -76,29 +69,13 @@ def compile_directory(
     directory = Path(directory).expanduser().resolve()
     if not directory.is_dir():
         raise ConfigurationError(f"run requires an Experiment directory: {directory}")
-    if calibration_level is not None and calibration_level not in CALIBRATION_SECONDS:
-        raise ConfigurationError("calibration level must be online, off, quick or full")
-    if calibration_seconds is not None and (
-        not isinstance(calibration_seconds, (int, float))
-        or isinstance(calibration_seconds, bool)
-        or not 0 <= calibration_seconds < float("inf")
+    if any(
+        value is not None
+        for value in (calibration_seconds, calibration_level, calibration_candidate)
     ):
         raise ConfigurationError(
-            "batch calibration budget must be finite and nonnegative"
+            "performance calibration was removed; declare trial_resources in the profile"
         )
-    calibration_overrides = {
-        key: value
-        for key, value in (
-            ("calibration_level", calibration_level),
-            ("calibration_candidate", calibration_candidate),
-            ("calibration_seconds", calibration_seconds),
-        )
-        if value is not None
-    }
-    if calibration_seconds == 0:
-        # V4 represents no isolated timeout as None; the shared budget below
-        # still validates that an explicit zero is only used with online/off.
-        calibration_overrides["calibration_seconds"] = None
     from smartsom.config.experiment_layout import entry_id, entrypoints
 
     paths = entrypoints(directory)
@@ -174,7 +151,6 @@ def compile_directory(
         return compile_files(
             directory,
             all_paths if incremental else paths,
-            calibration_overrides,
             execution_selection={
                 "entries": [entry_id(p, directory) for p in paths],
                 "first_train_seeds": first_train_seeds,
@@ -215,11 +191,6 @@ def load(root):
         or implementation_identity() != plan["implementation_sha256"]
     ):
         raise ValueError("batch source/dependency identity changed; create a new run")
-    from smartsom.experiments.batch_inventory import extend_view
-    from smartsom.experiments.runtime_control import snapshot
-
-    observed = snapshot(root)
-    plan, state = extend_view(root, plan, state, observed)
     for row in plan["files"]:
         child = (root / row["child"]).resolve()
         if not child.is_relative_to(root) or child == root:
@@ -227,25 +198,13 @@ def load(root):
         child_plan = load_reservation(child)
         if digest(child_plan) != row["child_plan_sha256"]:
             raise ValueError("frozen child plan changed")
-    for job in observed.get("additions", {}).values():
-        if job.get("child_plan_sha256"):
-            child_plan = load_reservation(Path(job["root"]))
-            if digest(child_plan) != job["child_plan_sha256"]:
-                raise ValueError("frozen appended child plan changed")
     return root, plan, state
 
 
 def _save(root, state):
-    from smartsom.experiments.batch_inventory import extend_view
-    from smartsom.experiments.runtime_control import snapshot
+    from smartsom.experiments.incremental_batch import counts
 
-    observed = snapshot(root)
-    base = json.loads((root / "plan.json").read_text())
-    saved = json.loads((root / "batch.json").read_text())
-    for key, value in saved["files"].items():
-        state["files"].setdefault(key, value)
-    _, merged = extend_view(root, base, state, observed)
-    state.update(files=merged["files"], status=merged["status"])
+    state.update(counts(state))
     if state.get("stage") == "selection_completed":
         from smartsom.experiments.incremental_batch import completion
 
@@ -254,58 +213,6 @@ def _save(root, state):
     record = json.loads((root / "run.json").read_text())
     record.update(status=state["status"], stage=state["stage"], files=state["files"])
     write_json(root / "run.json", record)
-
-
-def _quiet_worker(root, parent_root, retry_once=False):
-    """Keep child diagnostics in child logs while the parent owns the Rich view."""
-    from smartsom.experiments.control import CURRENT as CONTROL
-    from smartsom.experiments.control import PauseRequested, Scope, StopRequested
-
-    root = Path(root)
-    scope = Scope()
-    scope.inherit_driver(parent_root)
-    from smartsom.experiments.phase_resources import BATCH
-
-    BATCH.set((Path(parent_root).resolve(), root.resolve()))
-    token = CONTROL.set(scope)
-    status = "failed"
-    try:
-        (root / "logs").mkdir(parents=True, exist_ok=True)
-        with (
-            (root / "logs/driver-stdout.log").open("a") as stdout,
-            (root / "logs/driver-stderr.log").open("a") as stderr,
-        ):
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                from smartsom.experiments.locking import exclusive_lock
-                from smartsom.experiments.reservation import execute_saved
-
-                with exclusive_lock(root / "trial.lock"):
-                    result = (
-                        execute_saved(root, retry_once=True)
-                        if retry_once
-                        else execute_saved(root)
-                    )
-                if result["status"] in {"frozen", "wall_budget_reached"}:
-                    # Scheduling completion is separate from scientific completion.
-                    write_json(
-                        root / "batch.json",
-                        {
-                            **result,
-                            "status": "completed",
-                            "native_status": result["status"],
-                        },
-                    )
-        status = result.get("status", "completed")
-        return result
-    except (StopRequested, PauseRequested) as error:
-        status = "paused" if isinstance(error, PauseRequested) else "stopped"
-        return {"directory": str(root), "status": status}
-    except KeyboardInterrupt:
-        status = "stopped"
-        raise
-    finally:
-        scope.finish(status)
-        CONTROL.reset(token)
 
 
 def _publish(root, plan, state):
@@ -357,354 +264,11 @@ def _gate(root, row):
     return {"cases": len(cases), "passed": True}
 
 
-def _request_owned_stop(root):
-    from smartsom.experiments.control import read
-    from smartsom.experiments.control import write_json as control_write
-
-    owner = read(root)
-    if owner and owner.get("status") in {"running", "stop_requested", "stopping"}:
-        control_write(root / "control/stop.json", {"id": owner["id"]})
-
-
-def _runtime_initialize(root, plan, state, *, limit=None, keep_open=False, wait=True):
-    from smartsom.experiments import runtime_control as runtime
-
-    settings_path = Path(root) / "execution.json"
-    operations = (
-        json.loads(settings_path.read_text()).get("settings", {})
-        if settings_path.exists()
-        else plan.get("operations", {})
-    )
-    default = max((row.get("parallel_files", 1) for row in plan["files"]), default=1)
-    runtime.initialize(
-        root,
-        limit or operations.get("concurrency", {}).get("max_concurrent", default),
-        mode=operations.get("concurrency", {}).get("mode", "manual"),
-        keep_open=keep_open,
-        wait=wait,
-    )
-    with runtime.transaction(root, wait=wait) as saved:
-        resources = operations.get("resources", {})
-        if resources.get("cpus") is not None:
-            saved["budget"].setdefault("cpus", resources["cpus"])
-        if resources.get("memory_gib") is not None:
-            saved["budget"].setdefault("memory", int(resources["memory_gib"] * 1024**3))
-        if plan.get("incremental"):
-            selected = state["selection"]["tasks"]
-            prior = saved.get("launch_order", [])
-            saved["launch_order"] = selected + [
-                key for key in prior if key not in selected
-            ]
-        for row in plan["files"]:
-            saved["tasks"].setdefault(
-                row["id"], {"status": state["files"][row["id"]]["status"]}
-            )
-
-
-def _run_children(root, plan, state, rows, *, parallel_files):
-    from smartsom.experiments import runtime_control as runtime
-    from smartsom.experiments.runtime_workers import NativeScheduler
-
-    _runtime_initialize(root, plan, state, limit=parallel_files)
-    jobs = {
-        row["id"]: dict(
-            root=str(root / row["child"]),
-            status=state["files"][row["id"]]["status"],
-            own_slots=len(row.get("entry_ids", [])) > 1,
-        )
-        for row in rows
-    }
-    if runtime._RETRY_ENABLED:
-        from smartsom.experiments.batch_retry import prepare_stage_jobs
-
-        prepare_stage_jobs(jobs, runtime.snapshot(root))
-    else:
-        for job in jobs.values():
-            if job["status"] not in {"completed", "failed"}:
-                job["status"] = "queued"
-    scheduler = NativeScheduler(root, jobs)
-    if runtime._RETRY_ENABLED:
-        with runtime.transaction(root) as latest:
-            latest["retry_phase_closed"] = False
-    try:
-        while True:
-            if requested(root):
-                with runtime.transaction(root) as saved:
-                    saved["stopping"] = True
-            observed = scheduler.tick()
-            for row in rows:
-                state["files"][row["id"]].update(jobs[row["id"]])
-            state["status"] = observed["status"]
-            _save(root, state)
-            _publish(root, plan, state)
-            if not scheduler.unfinished:
-                if not runtime._RETRY_ENABLED:
-                    break
-                # Fence retry submissions with the same queue transaction so a
-                # request accepted just before the last worker exits is consumed.
-                with runtime.transaction(root) as latest:
-                    pending_retry = any(
-                        receipt.get("status") == "received"
-                        and receipt.get("payload", {}).get("kind") == "retry"
-                        for receipt in latest.get("commands", {}).values()
-                    )
-                    if not pending_retry:
-                        latest["retry_phase_closed"] = True
-                if not pending_retry:
-                    break
-            time.sleep(0.25)
-    except BaseException:
-        scheduler.close()
-        raise
-    return not observed["stopping"] and all(
-        jobs[row["id"]]["status"]
-        in {"completed", "stopped", "removed", "partial_removed", "partial_stopped"}
-        for row in rows
-    )
-
-
 @operation("batch-directory")
 def execute_saved(root, *, retry_failed=False):
-    from smartsom.experiments.locking import exclusive_lock
+    from smartsom.experiments.tune_batch import execute_directory
 
-    root, plan, state = load(root)
-    from smartsom.experiments import runtime_control as runtime
-    from smartsom.experiments.batch_retry import check_driver_recovery
-
-    check_driver_recovery(runtime.snapshot(root), enabled=runtime._RETRY_ENABLED)
-    bind(root)
-    from smartsom.experiments.queue_admission import initialize
-
-    session = CURRENT.get()
-    if session:
-        session.total_tasks = len(plan["files"])
-        _publish(root, plan, state)
-    with exclusive_lock(root / "driver.lock"):
-        # Reload under the claim: another submission may have changed execution selection.
-        root, plan, state = load(root)
-        from smartsom.experiments import runtime_control as runtime
-        from smartsom.experiments.incremental_batch import (
-            completion,
-            counts,
-            require_recovery,
-            selected_rows,
-        )
-
-        check_driver_recovery(runtime.snapshot(root), enabled=runtime._RETRY_ENABLED)
-        initialize(root, supported=plan.get("calibration_level") in {"off", "online"})
-        _runtime_initialize(root, plan, state)
-        if runtime._RETRY_ENABLED:
-            # Accepted queued retries survive a driver exit before batch.json
-            # was republished. Starting/running attempts require verification.
-            from smartsom.experiments.batch_retry import restore_selected_state
-
-            restore_selected_state(root, plan, state, runtime.snapshot(root))
-        if state["status"] in {
-            "stopped",
-            "failed",
-            "partial_stopped",
-            "partial_removed",
-            "partial",
-            "prepared",
-        }:
-            runtime.restart(root)
-        try:
-            if state["status"] == "completed":
-                for row in plan["files"]:
-                    if row["task"] == "evaluate":
-                        state["files"][row["id"]]["gate"] = _gate(root, row)
-                _publish(root, plan, state)
-                return {
-                    "directory": str(root),
-                    "status": "completed",
-                    "files": state["files"],
-                    **counts(state),
-                }
-            if state["status"] == "failed" and not retry_failed:
-                return {
-                    "directory": str(root),
-                    "status": "failed",
-                    "files": state["files"],
-                    "error": state.get("error"),
-                    "retry_required": True,
-                }
-            state.pop("error", None)
-            with runtime.transaction(root) as saved:
-                if runtime._RETRY_ENABLED:
-                    from smartsom.experiments.batch_retry import pending_retry_targets
-
-                    pending_retry = pending_retry_targets(saved)
-                else:
-                    pending_retry = ()
-                for key, job in saved.get("additions", {}).items():
-                    if runtime._RETRY_ENABLED and (
-                        job.get("retry_pending")
-                        or (key in pending_retry and job.get("status") == "paused")
-                    ):
-                        continue
-                    if job.get("owner_root") and job["status"] not in {
-                        "completed",
-                        "failed",
-                        "removed",
-                    }:
-                        from smartsom.experiments.reservation import arguments
-
-                        _, settings = arguments(Path(job["root"]))
-                        if (
-                            job["status"] not in {"queued", "deferred"}
-                            and settings.task == "train"
-                            and (
-                                job.get("started")
-                                or job.get("pid")
-                                or (Path(job["root"]) / "control/owner.json").exists()
-                            )
-                        ):
-                            child = Path(job["root"])
-                            if not (child / "continuation/current.json").is_file():
-                                raise ValueError(
-                                    "appended training has no complete continuation"
-                                )
-                        job["status"] = "queued"
-                        if runtime._RETRY_ENABLED and job.get("retry_once_active"):
-                            from smartsom.experiments.batch_retry import (
-                                sync_retry_addition,
-                            )
-
-                            sync_retry_addition(saved, key, job)
-            if retry_failed:
-                for row in plan["files"]:
-                    item = state["files"][row["id"]]
-                    selected = (
-                        not plan.get("incremental")
-                        or row["id"] in state["selection"]["tasks"]
-                    )
-                    if item["status"] == "failed" and selected:
-                        if plan.get("incremental"):
-                            require_recovery(root, row)
-                        item["status"] = "queued"
-                        with runtime.transaction(root) as saved:
-                            if row["id"] in saved.get("additions", {}):
-                                saved["additions"][row["id"]]["status"] = "queued"
-            if runtime._RETRY_ENABLED:
-                from smartsom.experiments.batch_retry import pending_retry_targets
-
-                pending_retries = pending_retry_targets(runtime.snapshot(root))
-            else:
-                pending_retries = ()
-            active_rows = selected_rows(plan, state, pending_retries)
-            stages = sorted({row["stage"] for row in active_rows})
-            for stage in stages:
-                _save(root, state)
-                _, plan, state = load(root)
-                rows = [row for row in active_rows if row["stage"] == stage]
-                if plan.get("incremental"):
-                    blocked = [
-                        row["id"]
-                        for row in plan["files"]
-                        if row["stage"] < stage
-                        and state["files"][row["id"]]["status"]
-                        not in {"completed", "deferred"}
-                    ]
-                    if blocked:
-                        raise RuntimeError(
-                            f"stage {stage}: prior stage tasks are incomplete: {blocked}"
-                        )
-                for row in rows:
-                    blocked = [
-                        identity
-                        for identity in row.get("requires", [])
-                        if state["files"][identity]["status"] != "completed"
-                    ]
-                    if blocked:
-                        raise RuntimeError(
-                            f"{row['id']}: dependencies did not complete: {blocked}"
-                        )
-                if all(
-                    state["files"][row["id"]]["status"] == "completed" for row in rows
-                ):
-                    for row in rows:
-                        if row["task"] == "evaluate":
-                            state["files"][row["id"]]["gate"] = _gate(root, row)
-                    continue
-                if requested(root):
-                    state.update(status="stopped", stage="stopped")
-                    break
-                state.update(status="running", stage=f"stage_{stage}")
-                _save(root, state)
-                _publish(root, plan, state)
-                unfinished = [
-                    row
-                    for row in rows
-                    if state["files"][row["id"]]["status"] != "completed"
-                ]
-                if not _run_children(
-                    root,
-                    plan,
-                    state,
-                    unfinished,
-                    parallel_files=rows[0]["parallel_files"],
-                ):
-                    if requested(root):
-                        state.update(status="stopped", stage="stopped")
-                        break
-                    raise RuntimeError(f"batch stage {stage} did not complete")
-                for row in rows:
-                    if (
-                        row["task"] == "evaluate"
-                        and state["files"][row["id"]]["status"] == "completed"
-                    ):
-                        state["files"][row["id"]]["gate"] = _gate(root, row)
-                        _save(root, state)
-            else:
-                from smartsom.experiments.runtime_workers import NativeScheduler
-
-                tail = NativeScheduler(root)
-                if runtime._RETRY_ENABLED:
-                    with runtime.transaction(root) as latest:
-                        latest["retry_phase_closed"] = False
-                while True:
-                    if requested(root):
-                        with runtime.transaction(root) as latest:
-                            latest["stopping"] = True
-                    tail.tick()
-                    if runtime.finish_if_drained(
-                        root,
-                        unfinished=tail.unfinished,
-                        failed=any(j["status"] == "failed" for j in tail.jobs.values()),
-                    ):
-                        break
-                    _publish(root, plan, state)
-                    time.sleep(0.25)
-                state.update(status=runtime.snapshot(root)["status"], stage="completed")
-                if plan.get("incremental") and state["status"] == "completed":
-                    state.update(status=completion(state), stage="selection_completed")
-        except KeyboardInterrupt:
-            state.update(status="stopped", stage="stopped")
-            for file_state in state["files"].values():
-                if file_state["status"] == "running":
-                    file_state["status"] = "stopped"
-        except BaseException as exc:
-            state.update(
-                status="failed", stage="failed", error=f"{type(exc).__name__}: {exc}"
-            )
-            for file_state in state["files"].values():
-                if file_state["status"] == "running":
-                    file_state["status"] = "failed"
-        runtime.publish(root, active=0, status=state["status"])
-        _save(root, state)
-        _, plan, state = load(root)
-        _publish(root, plan, state)
-        if plan.get("research_layout"):
-            from smartsom.experiments.research_report import write_reports
-
-            write_reports(root, plan, state)
-        return {
-            "directory": str(root),
-            "status": state["status"],
-            "files": state["files"],
-            "error": state.get("error"),
-            **counts(state),
-        }
+    return execute_directory(root, retry_failed=retry_failed)
 
 
 def run(
@@ -712,12 +276,11 @@ def run(
     *,
     background=False,
     display_options=None,
-    runtime_limit=None,
     keep_open=False,
 ):
+    if keep_open:
+        raise ValueError("online additions were removed; launch a frozen Tune cohort")
     root = allocate(directory_plan)
-    _, plan, state = load(root)
-    _runtime_initialize(root, plan, state, limit=runtime_limit, keep_open=keep_open)
     if background:
         from smartsom.experiments.background import launch
 

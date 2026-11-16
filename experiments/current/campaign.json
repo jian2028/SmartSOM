@@ -1,0 +1,245 @@
+{
+  "schema": "smartsom.campaign-inventory/v1",
+  "source": "1e91c81",
+  "status": "engineering_migration_not_formal_launch",
+  "objective": "makespan/5000 + mean_tardiness/300 + (1000/300)*(1-final_passing_rate)",
+  "large": "authored-only historical inputs retained in archive; not enabled",
+  "entries": [
+    {
+      "id": "small/base-shared-ppo",
+      "path": "experiments/current/small/base-shared-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/base-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/base-shared-dqn",
+      "path": "experiments/current/small/base-shared-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/base-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/base-independent-ppo",
+      "path": "experiments/current/small/base-independent-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/base-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/base-independent-dqn",
+      "path": "experiments/current/small/base-independent-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/base-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/sl-attention-shared-ppo",
+      "path": "experiments/current/small/sl-attention-shared-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/isl-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/sl-attention-shared-dqn",
+      "path": "experiments/current/small/sl-attention-shared-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/isl-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/sl-attention-independent-ppo",
+      "path": "experiments/current/small/sl-attention-independent-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/isl-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/sl-attention-independent-dqn",
+      "path": "experiments/current/small/sl-attention-independent-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/isl-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/sl-concat-shared-ppo",
+      "path": "experiments/current/small/sl-concat-shared-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/isl-concat-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/sl-concat-shared-dqn",
+      "path": "experiments/current/small/sl-concat-shared-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/isl-concat-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/sl-concat-independent-ppo",
+      "path": "experiments/current/small/sl-concat-independent-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/isl-concat-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/sl-concat-independent-dqn",
+      "path": "experiments/current/small/sl-concat-independent-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/small/isl-concat-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/rule",
+      "status": "authored_pending_validation",
+      "algorithm": "configs/algorithms/current/rule.yaml",
+      "role": "paper_baseline",
+      "speed_policy": "critical-ratio/v1",
+      "replaces": [
+        "1e91c81:experiments/v3/small/rule-slow/experiment.yaml",
+        "1e91c81:experiments/v3/small/rule-normal/experiment.yaml",
+        "1e91c81:experiments/v3/small/rule-fast/experiment.yaml"
+      ],
+      "reason": "named policy fixed-panel evaluation through Tune; no learner",
+      "path": "experiments/current/small/rule/experiment.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/random",
+      "status": "authored_pending_validation",
+      "source": "1e91c81:experiments/v3/small/random/experiment.yaml",
+      "reason": "named policy fixed-panel evaluation through Tune; no learner",
+      "role": "internal_debug_only",
+      "path": "experiments/current/small/random/experiment.yaml",
+      "algorithm": "configs/algorithms/current/random.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml"
+    },
+    {
+      "id": "small/morris-ppo",
+      "path": "experiments/current/small/morris-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "cd7074b:configs/algorithms/v2-morris-e1a-current-ppo-small.yaml",
+      "drain_source": "1e91c81:experiments/v3/small/base-shared/experiment.yaml",
+      "training_objective": "PR42 default overdue/failed-output reward scaled by 0.001",
+      "decision": "ADR0101"
+    },
+    {
+      "id": "medium/base-shared-ppo",
+      "path": "experiments/current/medium/base-shared-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/base-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/base-shared-dqn",
+      "path": "experiments/current/medium/base-shared-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/base-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/base-independent-ppo",
+      "path": "experiments/current/medium/base-independent-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/base-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/base-independent-dqn",
+      "path": "experiments/current/medium/base-independent-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/base-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/sl-attention-shared-ppo",
+      "path": "experiments/current/medium/sl-attention-shared-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/isl-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/sl-attention-shared-dqn",
+      "path": "experiments/current/medium/sl-attention-shared-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/isl-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/sl-attention-independent-ppo",
+      "path": "experiments/current/medium/sl-attention-independent-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/isl-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/sl-attention-independent-dqn",
+      "path": "experiments/current/medium/sl-attention-independent-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/isl-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/sl-concat-shared-ppo",
+      "path": "experiments/current/medium/sl-concat-shared-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/isl-concat-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/sl-concat-shared-dqn",
+      "path": "experiments/current/medium/sl-concat-shared-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/isl-concat-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/sl-concat-independent-ppo",
+      "path": "experiments/current/medium/sl-concat-independent-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/isl-concat-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/sl-concat-independent-dqn",
+      "path": "experiments/current/medium/sl-concat-independent-dqn/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "1e91c81:configs/algorithms/v3/medium/isl-concat-independent-ddqn.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/rule",
+      "status": "authored_pending_validation",
+      "algorithm": "configs/algorithms/current/rule.yaml",
+      "role": "paper_baseline",
+      "speed_policy": "critical-ratio/v1",
+      "replaces": [
+        "1e91c81:experiments/v3/medium/rule-slow/experiment.yaml",
+        "1e91c81:experiments/v3/medium/rule-normal/experiment.yaml",
+        "1e91c81:experiments/v3/medium/rule-fast/experiment.yaml"
+      ],
+      "reason": "named policy fixed-panel evaluation through Tune; no learner",
+      "path": "experiments/current/medium/rule/experiment.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/random",
+      "status": "authored_pending_validation",
+      "source": "1e91c81:experiments/v3/medium/random/experiment.yaml",
+      "reason": "named policy fixed-panel evaluation through Tune; no learner",
+      "role": "internal_debug_only",
+      "path": "experiments/current/medium/random/experiment.yaml",
+      "algorithm": "configs/algorithms/current/random.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml"
+    },
+    {
+      "id": "medium/morris-ppo",
+      "path": "experiments/current/medium/morris-ppo/experiment.yaml",
+      "status": "authored_pending_validation",
+      "algorithm_source": "cd7074b:configs/algorithms/v2-morris-e1a-current-ppo-medium.yaml",
+      "drain_source": "1e91c81:experiments/v3/medium/base-shared/experiment.yaml",
+      "training_objective": "PR42 default overdue/failed-output reward scaled by 0.001",
+      "decision": "ADR0101"
+    }
+  ]
+}

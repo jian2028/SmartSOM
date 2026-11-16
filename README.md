@@ -2,9 +2,10 @@
 
 SmartSOM is a manufacturing simulator for scheduling research. One physical core
 owns jobs, machines, AGVs, finite capacity, failures and time. Base negotiation
-and centralized assignment use that core; native PPO and DQN support Base and
-explicit social observations. Rule, random and Python policies use legal semantic
-candidates. Engineering tests do not establish research superiority.
+and centralized assignment use that core. The active migration uses official
+RLlib PPO/DQN and Tune for Base and implicit social-learning research models;
+the supported core has local Linux engineering acceptance. Engineering tests do not
+establish research superiority.
 
 ## Install and run
 
@@ -12,7 +13,7 @@ Use Python 3.12 and uv. Optional libraries are loaded only by their correspondin
 execution paths; importing the simulator needs no Torch, Gymnasium, Ray or W&B.
 
 ```sh
-uv sync --locked --extra learning --extra cpu --extra wandb
+uv sync --locked --extra learning --extra cpu --extra tuning --extra wandb
 uv run smartsom check current-smoke
 uv run smartsom run current-smoke
 ```
@@ -26,13 +27,15 @@ Algorithm components v2 explicitly selects learner/observation/encoder factories
 production policies, action permissions and a shared Mover. See
 [algorithm components](docs/algorithm-components.md).
 [Morris](configs/algorithms/morris.yaml) and [Justin](configs/algorithms/justin.yaml)
-use the same components and entry points. The matched [V2 campaign](experiments/v2/README.md) groups shared/independent
-Base/ISL, Morris, Justin and Random by map. Earlier
-[ISL recipes](experiments/implicit-sl/README.md) remain available.
+retain their historical components. The single maintained [RLlib campaign](experiments/current/README.md)
+contains Small/Medium Base, SL-attention and SL-concat recipes, plus one composite
+Rule baseline, internal Random fixed-panel recipe, and PR42 Morris/E1a-current PPO
+per size (ADR0101). Old [V2](archive/legacy_runtime/experiments/v2/README.md)
+and [ISL recipes](archive/legacy_runtime/experiments/implicit-sl/README.md) are archived.
 `check` and `run` accept an explicit file, directory or unambiguous name under
 `experiments`. Named Experiment YAML directories support
 execution-only `--first-train-seeds N` selection, `--resume-missing` supplementation,
-append-only new members and ordered `--id` / bound `--select` execution subsets
+frozen manifests and `--id` / bound `--select` execution subsets
 ([batch usage](docs/batch-incremental-usage.md)). Execution is foreground
 by default. Select `--background` explicitly for detached server execution.
 
@@ -83,31 +86,33 @@ start from integrated `main` or an explicit tag. This consolidation does not lau
 formal experiments or migrate old model weights automatically.
 
 See [component ownership](docs/algorithm-components.md) and the current
-[ISL study](experiments/implicit-sl/README.md) for sharing, seeds and fixed panels.
+[RLlib recipes](experiments/current/README.md) for sharing, seeds and fixed panels.
 
-Native batch resources are updated together through one official command:
+For the supported core and deferred interfaces, see the
+[migration status and configuration contract](docs/tune-migration.md).
+`smartsom` remains the official entry point. Fixed configurations and Optuna
+searches use the shared RLlib training and evaluation adapter. Configure total
+logical resources and resident driver, Learner and EnvRunner requests in the launch profile.
+Tune admits trials from those declarations; they are not measurements or OS limits.
+Evaluation worker counts and the optional trial concurrency cap are set at launch.
+The public PPO/DQN path uses FIFO and resident components. It no longer uses
+ResourceChangingScheduler or a bootstrap actor. Official starting recipes are
+`configs/algorithms/rllib-base-ppo.yaml` and `rllib-base-dqn.yaml`.
+Core lifecycle and representative PPO/DQN performance checks passed locally;
+deferred scientific interfaces receive explicit migration errors. Other platforms
+remain unverified.
 
-```sh
-source .venv/bin/activate
-smartsom configure RUN_DIRECTORY --max-concurrent 8 --evaluation-processes 5 --evaluation-cpus 5 --cpus 30
-smartsom status RUN_DIRECTORY
-smartsom status RUN_DIRECTORY --json
-```
-
-`--cpus` and `--memory-gib` are the whole-run budget. `--evaluation-cpus` is the
-total CPU cap for one experiment's evaluation panel, shared by its workers; it is
-not a per-worker request. Actual workers can be fewer than the target. Training
-retains its baseline lease and shrinking evaluation drains current cases first.
-These are cooperative admission quotas, not OS isolation. `--task-id ID` scopes
-only evaluation settings; queue-wide settings cannot be combined with that scope.
-All fields in a configure request validate and apply together. The returned receipt
-acknowledges submission; `status --command-id ID --json` reports its application.
-
-The CLI no longer accepts `batch-*`, `runs list/show`, `resume --retry-failed`, or
-`stop --delete`. Use `run`, `configure`, `status`, `pause/resume/stop/retry`, and
-`add/close/remove/clean`; see [the workflow](docs/current-workflow.md). Existing
-running experiments retain their archived source and commands. No source or
-checkpoint migration is performed.
+Whole-run `pause`, `resume`, `retry --all`, `stop` and confirmed `clean` remain.
+Online `add/close/configure/remove`, task-level control and priority commands are
+removed. Existing running experiments retain their archived source and commands;
+this migration does not modify their processes, checkpoints or environments.
 
 For single-task parallel sampling and PPO/DQN update schedules, see
 [training controls](docs/training-sampling.md). Existing entry points are unchanged.
+
+The [core closeout scope](docs/decisions/0098-rllib-core-closeout.md) retains rule
+smoke and scientific calibration. Named Base Rule/Random fixed-panel evaluation is
+also supported (ADR0100). Learning standalone evaluation, window/recovery analysis,
+and new training recordings are deferred and rejected
+by both `check` and `run` before allocating a run. Native learner/checkpoint formats
+are historical inputs, not fallback execution paths.

@@ -69,7 +69,7 @@ CLOUD_SCALARS = frozenset(
     """
 physical_ticks committed_physical_ticks inflight_episode_tick tick tick_budget episode_budget
 physical_tick_budget episodes episode updates wall_seconds deadline_unix completed total_orders
-unfinished mean_tardiness passing_rate final_passing_rate joint_cost observed_return learning_return observed_overdue
+unfinished makespan mean_tardiness passing_rate final_passing_rate joint_cost observed_return learning_return observed_overdue
 failed decisions learner_update_seconds ppo_update_seconds reward case_index cases total last_arrival
 order_delivery_fraction case_drain_rate qualified_delivery_coverage throughput_per_1000_ticks
 qualified_throughput_per_1000_ticks common_window_throughput common_window_qualified_throughput
@@ -157,6 +157,7 @@ class ExperimentTracking:
         self.status = {"mode": self.settings["mode"], "sync_status": "not_started"}
         self.closed = False
         self.sequence = 0
+        self.committed_events = set()
         self.stop = threading.Event()
         self.monitor = None
         self.sync_lock = threading.Lock()
@@ -224,7 +225,12 @@ class ExperimentTracking:
         journal = tracking / "events.jsonl"
         if journal.exists():
             for line in journal.read_text().splitlines():
-                self._remember_tables(json.loads(line))
+                saved_event = json.loads(line)
+                self.sequence = max(self.sequence, saved_event.get("event_sequence", 0))
+                if saved_event.get("event_id") is not None:
+                    self.committed_events.add(saved_event["event_id"])
+                self._remember_tables(saved_event)
+        self.status["sequence"] = self.sequence
         self.stream = journal.open("a", encoding="utf-8")
         if self.settings["tensorboard"]:
             from smartsom.telemetry.tensorboard import TensorBoardRecorder
@@ -401,6 +407,9 @@ class ExperimentTracking:
         write_json(self.state_path, self.status)
 
     def log(self, event):
+        event_id = event.get("event_id")
+        if event_id is not None and event_id in self.committed_events:
+            return
         self.sequence += 1
         import psutil
 
@@ -418,6 +427,8 @@ class ExperimentTracking:
         row = {**event, "event_sequence": self.sequence}
         self.stream.write(json.dumps(row, allow_nan=False, default=str) + "\n")
         self.stream.flush()
+        if event_id is not None:
+            self.committed_events.add(event_id)
         self.status["sequence"] = self.sequence
         self.pending_tables = {}
         self._remember_tables(row)

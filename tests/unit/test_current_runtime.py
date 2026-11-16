@@ -1,6 +1,5 @@
 """Current control contracts and the source-backed rule-credit physical reference."""
 
-import hashlib
 import io
 import json
 import math
@@ -41,7 +40,7 @@ def inputs(**options):
     )
 
 
-def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp_path):
+def test_rule_calibration_uses_fixed_matching_baselines(tmp_path):
 
     import yaml
 
@@ -116,38 +115,29 @@ def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp
     assert report["status"] == "frozen"
     assert len(report["results"]) == 8
     assert {r["method"] for r in report["results"]} == {"rule", "random"}
-    api.run_experiment(
+    # The public runtime no longer offers standalone evaluation. Calibration
+    # physics remain testable without restoring that retired execution path.
+    from smartsom.config.base_diagnostic import load_inputs
+    from smartsom.config.reservation import compile_reservation
+    from smartsom.experiments.reservation import allocate, arguments
+    from smartsom.experiments.reservation_runtime import frozen_drain
+
+    plan = compile_reservation(
         path,
-        task="evaluate",
-        operations=operations,
+        task="calibrate",
         sets=settings
         + [
-            f'experiment.run.output="{tmp_path / "evaluate"}"',
+            "algorithm.control=base",
+            "algorithm.production.bindings={}",
+            "algorithm.production={default: rule, policies: {rule: {kind: policy, observation: {target: smartsom.observations.rules.create_observation}, implementation: {target: smartsom.policies.rule.create_policy}}}}",
+            f'experiment.run.output="{tmp_path / "wrong-control"}"',
             f'experiment.run.calibration="{calibration}"',
         ],
     )
-    cases = [
-        json.loads(line)
-        for line in (tmp_path / "evaluate/cases.jsonl").read_text().splitlines()
-    ]
-    assert len(cases) == 8
-    assert {r["method"] for r in cases} == {"rule", "random"}
-    assert all(r["status"] == "completed" for r in cases)
-    # The same workload cannot silently reuse centralized proof for Base physics.
+    root = allocate(plan, announce=False)
+    args, _ = arguments(root)
     with pytest.raises(ValueError, match="matching completed calibration"):
-        api.run_experiment(
-            path,
-            task="evaluate",
-            operations=operations,
-            sets=settings
-            + [
-                "algorithm.control=base",
-                "algorithm.production.bindings={}",
-                "algorithm.production={default: rule, policies: {rule: {kind: policy, observation: {target: smartsom.observations.rules.create_observation}, implementation: {target: smartsom.policies.rule.create_policy}}}}",
-                f'experiment.run.output="{tmp_path / "wrong-control"}"',
-                f'experiment.run.calibration="{calibration}"',
-            ],
-        )
+        frozen_drain(args, load_inputs(args.experiment)[-1])
 
 
 def test_recording_keeps_decisions_rewards_and_random_sequence(tmp_path):
@@ -190,26 +180,11 @@ def test_recording_keeps_decisions_rewards_and_random_sequence(tmp_path):
     assert playback.row(playback.last_tick)["state"]["completed"]
 
 
-@pytest.mark.parametrize(
-    ("condition", "ticks", "digest"),
-    [
-        (
-            "normal",
-            142,
-            "f4b3c10d56536e70d7b636d656e257cc0b7e8d0eea97c12a6ea35847defb8caf",
-        ),
-        (
-            "high",
-            167,
-            "ac4bc812b72eba505ba9406364a6f52c69d9f8aaacf1ddb2f521774a8c861970",
-        ),
-    ],
-)
-def test_base_matches_frozen_cloud_server_credit_protocol(condition, ticks, digest):
+@pytest.mark.parametrize("condition", ["normal", "high"])
+def test_current_rule_completes_with_legal_actions_and_consistent_rewards(condition):
     factory, workload, options = inputs()
-    # Semantic trace regenerated independently from the verified pre-change archive
-    # (5efd4d0 plus archived development changes, 2026-11-06). Input serialization
-    # changed; physical events, candidate IDs/actions and decisions must not change.
+    # ADR0099 deliberately changes speed decisions. Historical normal-only trace
+    # hashes are not contracts for the current Rule; physical invariants remain.
     factory = reservation_factory()
     trace = io.StringIO()
     report, rewards, _ = episode(
@@ -224,20 +199,16 @@ def test_base_matches_frozen_cloud_server_credit_protocol(condition, ticks, dige
         metrics_level="off",
     )
     rows = [json.loads(line) for line in trace.getvalue().splitlines()]
+    processing = []
     for row in rows:
         for decision in row["decisions"]:
             raw = decision["decision"]
-            decision["decision"] = {
-                key: raw[key]
-                for key in ("tick", "group", "owner", "stage", "rejected_owners")
-            }
-            decision["decision"]["candidates"] = [
-                {key: candidate[key] for key in ("identity", "action")}
-                for candidate in raw["candidates"]
-            ]
-    normalized = json.dumps(rows, sort_keys=True, separators=(",", ":"))
-    assert hashlib.sha256(normalized.encode()).hexdigest() == digest
-    assert report["tick"] == ticks and report["completed"] == 8
+            assert decision["action"] in [c["action"] for c in raw["candidates"]]
+            if raw["group"] == "machine":
+                processing.append(decision["action"])
+    assert processing and {action[1] for action in processing} >= {"slow", "fast"}
+    assert report["termination_reason"] == "all_delivered"
+    assert report["completed"] == workload.orders == 8
     assert sum(rewards) == pytest.approx(report["observed_return"])
 
 
@@ -572,66 +543,6 @@ def test_interrupted_full_recording_preserves_attempt_and_restarts(tmp_path):
     assert (directory / "attempt-000002/replay/run.json").is_file()
 
 
-def test_native_parallel_evaluation_preserves_order_and_resume(tmp_path):
-    from smartsom import api
-    from smartsom.experiments.reservation import arguments
-    from smartsom.experiments.reservation_runtime import evaluate
-
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "experiments/examples/small/default/experiment.yaml"
-    )
-    common = [
-        "experiment.run.task=evaluate",
-        "scenario.jobs.orders.total=4",
-        "scenario.jobs.orders.initial=2",
-        "scenario.jobs.arrivals.mean_interval_ticks=4",
-        "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
-        "experiment.drain_ticks=100",
-        "experiment.drain_frozen=true",
-        "experiment.run.seconds=null",
-        "experiment.test_cases=4",
-        "experiment.run.split=test",
-        "experiment.run.action_seeds=1",
-        "experiment.run.methods=[rule, random]",
-        "experiment.run.selection=argmax",
-    ]
-    from smartsom.config.reservation import compile_reservation
-
-    source = compile_reservation(source, sets=common).materialize(
-        tmp_path / "standalone"
-    )
-    panels = []
-    for workers in (1, 4):
-        out = tmp_path / f"workers-{workers}"
-        api.run_experiment(
-            source,
-            task="evaluate",
-            operations={
-                "tracking": {"mode": "disabled"},
-                "concurrency": {"evaluation_processes": workers},
-            },
-            sets=common + [f'experiment.run.output="{out}"'],
-        )
-        rows = [
-            json.loads(line) for line in (out / "cases.jsonl").read_text().splitlines()
-        ]
-        for row in rows:
-            row.pop("wall_seconds")
-            row.get("research_metrics", {}).pop("observer_seconds", None)
-        panels.append(rows)
-        receipts = {
-            p.name: p.read_bytes() for p in (out / "case-commits").glob("case-*.json")
-        }
-        args, _ = arguments(out)
-        evaluate(args)
-        assert receipts == {
-            p.name: p.read_bytes() for p in (out / "case-commits").glob("case-*.json")
-        }
-    assert len(panels[0]) == 8
-    assert panels[0] == panels[1]
-
-
 def test_evaluation_processes_are_operational_and_strict():
     from pydantic import ValidationError
 
@@ -644,261 +555,3 @@ def test_evaluation_processes_are_operational_and_strict():
     for bad in (0, -1, True, 1.5, 65):
         with pytest.raises(ValidationError):
             Concurrency(evaluation_processes=bad)
-
-
-def _crash_evaluation_worker(connection, cancelled, settings):
-    import os
-
-    connection.recv()
-    os._exit(7)
-
-
-def test_parallel_worker_crash_is_not_a_case_result(tmp_path, monkeypatch):
-    import multiprocessing
-    from types import SimpleNamespace
-
-    from smartsom.experiments import parallel_evaluation
-
-    before = {p.pid for p in multiprocessing.active_children()}
-    monkeypatch.setattr(parallel_evaluation, "_worker", _crash_evaluation_worker)
-    prepared = (None, None, None, SimpleNamespace(component_items=lambda: ()))
-    with pytest.raises(RuntimeError, match="exited without a result"):
-        list(
-            parallel_evaluation.case_results(
-                {"output": str(tmp_path)},
-                [{"index": i} for i in range(4)],
-                prepared,
-                workers=4,
-                on_progress=lambda *_: None,
-            )
-        )
-    assert {p.pid for p in multiprocessing.active_children()} <= before
-
-
-def test_parallel_panel_pause_keeps_receipts_and_joins_workers(tmp_path, monkeypatch):
-    import multiprocessing
-
-    from smartsom import api
-    from smartsom.config.reservation import compile_reservation
-    from smartsom.experiments import control, reservation_runtime
-    from smartsom.experiments.reservation import arguments
-
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "experiments/examples/small/default/experiment.yaml"
-    )
-    out = tmp_path / "run"
-    source = compile_reservation(
-        source,
-        sets=[
-            "experiment.run.task=evaluate",
-            "experiment.run.seconds=null",
-            "experiment.run.methods=[rule]",
-            "experiment.run.split=test",
-            "experiment.test_cases=8",
-            "experiment.run.action_seeds=1",
-            "experiment.drain_ticks=100",
-            "experiment.drain_frozen=true",
-            "scenario.jobs.orders.total=4",
-            "scenario.jobs.orders.initial=2",
-            f'experiment.run.output="{out}"',
-        ],
-    ).materialize(tmp_path / "inputs")
-    original = reservation_runtime.publish_progress
-    requested = []
-
-    def publish(root, payload, **kwargs):
-        original(root, payload, **kwargs)
-        if payload.get("completed_cases") == 1 and not requested:
-            requested.append(True)
-            control.request_pause(out)
-
-    monkeypatch.setattr(reservation_runtime, "publish_progress", publish)
-    before = {p.pid for p in multiprocessing.active_children()}
-    with pytest.raises(control.PauseRequested):
-        api.run_experiment(
-            source,
-            operations={
-                "tracking": {"mode": "disabled"},
-                "concurrency": {"evaluation_processes": 4},
-            },
-        )
-    assert requested
-    assert json.loads((out / "progress.json").read_text())["status"] == "paused"
-    receipts = {
-        p.name: p.read_bytes() for p in (out / "case-commits").glob("case-*.json")
-    }
-    assert len(receipts) == 1
-    assert {p.pid for p in multiprocessing.active_children()} <= before
-    control.clear_pause(out)
-    monkeypatch.setattr(reservation_runtime, "publish_progress", original)
-    args, _ = arguments(out)
-    reservation_runtime.evaluate(args)
-    assert len(list((out / "case-commits").glob("case-*.json"))) == 8
-    assert all(
-        (out / "case-commits" / name).read_bytes() == data
-        for name, data in receipts.items()
-    )
-    assert {p.pid for p in multiprocessing.active_children()} <= before
-
-
-def _evaluation_failure_worker(connection, cancelled, settings):
-    connection.recv()
-    connection.send(("error", settings["error_type"], "injected worker failure"))
-    connection.close()
-
-
-@pytest.mark.parametrize(
-    "name", ["ValueError", "AssertionError", "ResourceGuardExceeded"]
-)
-def test_parallel_failures_preserve_explicit_recovery_category(
-    tmp_path, monkeypatch, name
-):
-    import multiprocessing
-    from types import SimpleNamespace
-
-    from smartsom.experiments import parallel_evaluation
-    from smartsom.experiments.resource_guard import ResourceGuardExceeded
-
-    expected = {
-        "ValueError": ValueError,
-        "AssertionError": AssertionError,
-        "ResourceGuardExceeded": ResourceGuardExceeded,
-    }[name]
-    monkeypatch.setattr(parallel_evaluation, "_worker", _evaluation_failure_worker)
-    before = {p.pid for p in multiprocessing.active_children()}
-    prepared = (None, None, None, SimpleNamespace(component_items=lambda: ()))
-    with pytest.raises(expected, match="injected worker failure"):
-        list(
-            parallel_evaluation.case_results(
-                {"output": str(tmp_path), "error_type": name},
-                [{"index": 0}],
-                prepared,
-                workers=4,
-                on_progress=lambda *_: None,
-            )
-        )
-    assert {p.pid for p in multiprocessing.active_children()} <= before
-
-
-def test_evaluation_worker_validation_error_retains_value_error_category(monkeypatch):
-    from threading import Event
-
-    from smartsom.config import base_diagnostic
-    from smartsom.config.launch import Concurrency
-    from smartsom.experiments.parallel_evaluation import _worker
-
-    class Connection:
-        def __init__(self):
-            self.messages = []
-            self.closed = False
-
-        def send(self, message):
-            self.messages.append(message)
-
-        def close(self):
-            self.closed = True
-
-    def invalid_inputs(_):
-        return Concurrency(evaluation_processes=0)
-
-    monkeypatch.setattr(base_diagnostic, "load_inputs", invalid_inputs)
-    connection = Connection()
-    _worker(connection, Event(), {"experiment": "invalid"})
-    assert connection.closed
-    kind, category, detail = connection.messages[0]
-    assert (kind, category) == ("error", "ValueError")
-    assert "ValidationError" in detail
-
-
-@pytest.mark.parametrize(
-    "authored,execution,expected",
-    [(None, None, 1), (4, None, 4), (4, 1, 1), (1, 4, 4)],
-)
-def test_native_worker_resources_read_only_effective_operations(
-    tmp_path, authored, execution, expected
-):
-    from smartsom.experiments.runtime_workers import NativeScheduler
-
-    inputs = tmp_path / "inputs"
-    inputs.mkdir()
-    document = "run:\n  seed: 4103\n"
-    if authored is not None:
-        document += f"concurrency:\n  evaluation_processes: {authored}\n"
-    (inputs / "experiment.yaml").write_text(document)
-    if execution is not None:
-        (tmp_path / "execution.json").write_text(
-            json.dumps(
-                {"settings": {"concurrency": {"evaluation_processes": execution}}}
-            )
-        )
-    job = {"root": str(tmp_path)}
-    NativeScheduler._requirements(None, job)
-    assert job["cpus"] == job["authored_cpus"] == 1
-    assert job["evaluation_processes"] == expected
-    # A stopped appended job may carry an obsolete whole-run envelope.
-    job.update(cpus=20, authored_cpus=20, resource_memory=21 * 256 * 1024**2)
-    NativeScheduler._requirements(None, job)
-    assert job["cpus"] == 1
-    assert "resource_memory" not in job
-
-
-def test_native_worker_resources_reject_invalid_process_count(tmp_path):
-    from smartsom.experiments.runtime_workers import NativeScheduler
-
-    inputs = tmp_path / "inputs"
-    inputs.mkdir()
-    (inputs / "experiment.yaml").write_text(
-        "concurrency:\n  evaluation_processes: true\n"
-    )
-    with pytest.raises(ValueError):
-        NativeScheduler._requirements(None, {"root": str(tmp_path)})
-
-
-def _resizing_case_worker(connection, cancelled, settings):
-    import os
-    import time
-
-    while not cancelled.is_set():
-        if not connection.poll(0.02):
-            continue
-        task = connection.recv()
-        if task is None:
-            break
-        time.sleep(0.04 if task["index"] % 3 == 0 else 0.01)
-        connection.send(("result", task["index"], (task["index"], os.getpid())))
-    connection.close()
-
-
-def test_case_pool_resizes_without_reordering_or_losing_cases(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-
-    from smartsom.experiments import parallel_evaluation
-
-    monkeypatch.setattr(parallel_evaluation, "_worker", _resizing_case_worker)
-    received = []
-    live_counts = []
-
-    def capacity(live):
-        live_counts.append(live)
-        return 2 if len(received) < 2 else 4 if len(received) < 7 else 1
-
-    prepared = (None, None, None, SimpleNamespace(component_items=lambda: []))
-    for index, result in parallel_evaluation.case_results(
-        {"output": tmp_path},
-        [{"index": i} for i in range(16)],
-        prepared,
-        workers=2,
-        on_progress=lambda *_: None,
-        capacity=capacity,
-    ):
-        received.append((index, result))
-    assert [i for i, _ in received] == list(range(16))
-    assert [result[0] for _, result in received] == list(range(16))
-    assert max(live_counts) == 4
-    assert live_counts[-1] == 1
-    import multiprocessing
-
-    assert not {result[1] for _, result in received} & {
-        p.pid for p in multiprocessing.active_children()
-    }

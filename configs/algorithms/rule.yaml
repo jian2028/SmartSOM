@@ -14,7 +14,8 @@ production:
       observation:
         target: smartsom.observations.rules.create_observation
 
-      # 规则实现：接收具名公开信息和合法候选
+      # 单一组合 Rule：EDD 选工件；CR<1 fast，1≤CR<1.2 normal，CR≥1.2 slow。
+      # CR = 距交期时间 /（本机 normal 工时 + 后续工序最短 normal 标称工时）。
       implementation:
         target: smartsom.policies.rule.create_policy
 

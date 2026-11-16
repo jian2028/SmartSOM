@@ -310,9 +310,12 @@ def validate_components(algorithm):
                     else contexts[key.split(".")[-1]]
                 )
             }
+            factory = resolve(spec)
+            if getattr(factory, "CONTRACT", None) == "smartsom.rllib-algorithm/v1":
+                context = dict.fromkeys(("scenario", "options", "seed"))
             if set(context) & set(spec.params):
                 raise ValueError("component params cannot override runtime context")
-            inspect.signature(resolve(spec)).bind(**context, **spec.params)
+            inspect.signature(factory).bind(**context, **spec.params)
         reward_factory = resolve(algorithm.reward)
         if getattr(reward_factory, "CONTRACT", None) != "smartsom.reward/v1":
             raise ValueError("reward factory must declare smartsom.reward/v1")
@@ -329,8 +332,13 @@ def validate_components(algorithm):
         for name, policy in algorithm.production.policies.items():
             if policy.kind == "learning":
                 learner = resolve(policy.learner)
-                if getattr(learner, "CONTRACT", None) != "smartsom.learner/v1":
-                    raise ValueError("learner factory must declare smartsom.learner/v1")
+                if getattr(learner, "CONTRACT", None) not in {
+                    "smartsom.learner/v1",
+                    "smartsom.rllib-algorithm/v1",
+                }:
+                    raise ValueError(
+                        "learner factory must declare smartsom.learner/v1 or smartsom.rllib-algorithm/v1"
+                    )
                 validate = getattr(learner, "validate_parameters", None)
                 if validate is not None:
                     validate(**policy.learner.params)

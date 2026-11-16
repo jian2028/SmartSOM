@@ -11,21 +11,36 @@ from uuid import uuid4
 from smartsom.algorithms.base_policy import build_policy, evaluation_recipe
 from smartsom.config.base_diagnostic import load_inputs
 from smartsom.experiments import reservation_runtime as runtime
-from smartsom.experiments.control import PauseRequested, StopRequested
 from smartsom.telemetry.runtime import operation
 
 
 def smoke(args):
+    """Run only non-learning smoke cases inside the owning Tune actor.
+
+    Learning smoke uses the same RLlib Trainable as ordinary training.
+    """
+    from smartsom.algorithms.base_policy import uses_learning
+    from smartsom.experiments import control
+
     ex, factory, workload, options, paths = load_inputs(args.experiment)
-    runtime.freeze(
-        args.output, paths, "smoke", {"tick_budget_per_method": ex.run.smoke_ticks}
-    )
     rows = []
-    deadline = time.monotonic() + ex.run.seconds
+    manifest = json.loads((Path(args.output) / "manifest.json").read_text())
+    deadline = (
+        time.monotonic()
+        + max(0, manifest["started_unix"] + ex.run.seconds - time.time())
+        if ex.run.seconds is not None
+        else None
+    )
     for method in ex.run.methods:
-        current = evaluation_recipe(options, method)
-        policy = build_policy(current, ex.run.seed)
-        row, rewards, critic = runtime.episode(
+        current = (
+            options
+            if method in {"ppo", "dqn"} and method == options.method
+            else evaluation_recipe(options, method)
+        )
+        if uses_learning(current):
+            continue
+        policy = build_policy(current, ex.run.seed, training=False)
+        row, _, _ = runtime.episode(
             *ex.inputs_for("normal", factory, workload),
             current,
             policy,
@@ -37,15 +52,9 @@ def smoke(args):
             diagnostics=ex.run.diagnostics,
             metrics_level=ex.run.metrics,
             metric_interval=ex.run.metric_interval,
+            control_check=lambda: control.boundary(args.output, fresh=True),
         )
         row["method"] = method
-        if getattr(policy, "training", False):
-            policy.update(
-                rewards, terminal=row["status"] == "completed", final_critic=critic
-            )
-            policy.save(Path(args.output) / "last.pt")
-            row["updates"] = policy.updates
-            row["losses"] = policy.last_losses
         rows.append(row)
         runtime.write_json(
             Path(args.output) / "progress.json",
@@ -59,6 +68,7 @@ def smoke(args):
         Path(args.output) / "progress.json",
         {"status": "completed", "methods_done": len(rows)},
     )
+    return rows
 
 
 SCHEMA = "smartsom.reservation-plan/v1"
@@ -85,7 +95,7 @@ def load(root):
     return plan
 
 
-def allocate(plan, *, root=None, tracking_group=None):
+def allocate(plan, *, root=None, tracking_group=None, announce=True):
     from datetime import UTC, datetime
 
     root = Path(root or plan.experiment.run.output)
@@ -163,17 +173,20 @@ def allocate(plan, *, root=None, tracking_group=None):
         {"settings": plan.operations, "origins": plan.origins, "history": []},
     )
     saved = json.loads((root / "plan.json").read_text())
-    print(
-        f"Run: {saved['run_id']}\nOutput: {root}\nMonitor: smartsom attach {root}",
-        flush=True,
-    )
+    if announce:
+        print(
+            f"Run: {saved['run_id']}\nOutput: {root}\nMonitor: smartsom attach {root}",
+            flush=True,
+        )
     return root
 
 
 @operation("reservation")
 def run(plan):
+    from smartsom.config.rllib_compatibility import validate_plan
     from smartsom.experiments.evidence import runtime_metadata
 
+    validate_plan(plan)
     with runtime_metadata():
         root = allocate(plan)
         if plan.experiment.launch.mode == "background":
@@ -209,93 +222,14 @@ def arguments(root):
     ), settings
 
 
-def execute_saved(root, *, retry_once=False):
-    from smartsom.experiments.resource_guard import ResourceGuardExceeded
-    from smartsom.telemetry.runtime import bind
+def execute_saved(root, *, retry_failed=False):
+    from smartsom.experiments.tune_batch import execute_single
 
-    root = Path(root).resolve()
-    load(root)
-    args, settings = arguments(root)
-    args._prepared_inputs[0][0].validate_execution()
-    bind(root)
-    from smartsom.experiments.launch import check_resource_budget
+    if (Path(root) / "search.json").is_file():
+        from smartsom.experiments.tune_hpo import execute
 
-    check_resource_budget(root, prepared=args._prepared_inputs)
-    progress = root / "progress.json"
-    if progress.exists():
-        previous = json.loads(progress.read_text())
-        if previous["status"] in (
-            "completed",
-            "wall_budget_reached",
-            "recommended",
-            "frozen",
-        ) and not (
-            settings.task == "train"
-            and load_inputs(args.experiment)[0].final_evaluation
-            and not (root / "evaluation/completed.json").exists()
-        ):
-            return {"directory": str(root), **previous}
-    if settings.tune != "off":
-        from smartsom.experiments.reservation_tune import execute as tune
-
-        runtime.write_json(progress, {"status": "running", "stage": "tuning"})
-        try:
-            return tune(root)
-        except BaseException as exc:
-            status = (
-                "paused"
-                if isinstance(exc, PauseRequested)
-                else "stopped"
-                if isinstance(exc, (StopRequested, KeyboardInterrupt, SystemExit))
-                else "failed"
-            )
-            runtime.write_json(progress, {"status": status, "error": str(exc)})
-            runtime.write_json(root / "batch.json", {"status": status})
-            raise
-    attempts_file = root / "attempts.json"
-    attempts = json.loads(attempts_file.read_text()) if attempts_file.exists() else []
-    while True:
-        try:
-            {
-                "smoke": smoke,
-                "calibrate": runtime.calibrate,
-                "train": runtime.train,
-                "evaluate": runtime.evaluate,
-            }[settings.task](args)
-            result = {"directory": str(root), **json.loads(progress.read_text())}
-            runtime.write_json(root / "batch.json", result)
-            return result
-        except BaseException as exc:
-            stopped = isinstance(exc, (StopRequested, KeyboardInterrupt, SystemExit))
-            attempts.append(
-                {
-                    "time": time.time(),
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                    "stopped": stopped,
-                }
-            )
-            runtime.write_json(attempts_file, attempts)
-            status = (
-                "paused"
-                if isinstance(exc, PauseRequested)
-                else "stopped"
-                if stopped
-                else "failed"
-            )
-            runtime.write_json(progress, {"status": status})
-            runtime.write_json(root / "batch.json", {"status": status})
-            failures = sum(not item["stopped"] for item in attempts)
-            if (
-                stopped
-                or retry_once
-                or settings.task not in {"train", "evaluate", "calibrate"}
-                or failures > settings.max_failures
-                or isinstance(exc, (ValueError, AssertionError, ResourceGuardExceeded))
-            ):
-                raise
-            # A new session restores the latest atomic complete-update generation.
-            load(root)
+        return execute(root, retry_failed=retry_failed)
+    return execute_single(root, retry_failed=retry_failed)
 
 
 @operation("reservation-resume")
@@ -304,17 +238,9 @@ def resume(root, *, background=False, retry_failed=False):
 
     root = Path(root).resolve()
     load(root)
-    progress = root / "progress.json"
-    if progress.exists() and json.loads(progress.read_text())["status"] in (
-        "completed",
-        "wall_budget_reached",
-        "recommended",
-        "frozen",
-    ):
-        return execute_saved(root)
     _check_owner(root)
     return (
         launch(root, resume=True, retry_failed=retry_failed)
         if background
-        else execute_saved(root)
+        else execute_saved(root, retry_failed=retry_failed)
     )

@@ -18,11 +18,7 @@ def submission(root, *, adopting_queue=None):
     root.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(root.parent / ("." + root.name + ".submission.lock")):
         if root.exists():
-            from smartsom.experiments.queue_admission import snapshot
-
-            shared = snapshot(root) if adopting_queue is not None else {}
-            if adopting_queue is None or shared.get("queue") != str(adopting_queue):
-                _check_owner(root)
+            _check_owner(root)
         yield
 
 
@@ -75,78 +71,44 @@ def require_recovery(root, row):
 
 
 def activate(directory_plan):
-    from smartsom.experiments import runtime_control as runtime
-    from smartsom.experiments.author_batch import _runtime_initialize, _save, load
+    from smartsom.config.codec import digest
+    from smartsom.experiments.author_batch import _save, load
 
     root = directory_plan.output_root
     with exclusive_lock(root / "driver.lock"):
         root, plan, state = load(root)
-        from smartsom.experiments.batch_inventory import prepare, validate
-
-        validate(directory_plan, plan, root)
-        selected = set(directory_plan.selection["tasks"])
-        activated = []
-        controls = runtime.snapshot(root)
-        held = (
-            controls.get("paused_tasks", [])
-            + controls.get("stopped_tasks", [])
-            + controls.get("removed_tasks", [])
-        )
-        if controls.get("paused") or any(
-            runtime.matches(row["id"], held)
-            for row in plan["files"]
-            if row["id"] in selected
-            and (
-                state["files"][row["id"]]["status"] != "completed"
-                or pending_evaluation(root, row)
-            )
-        ):
+        if plan["directory"] != str(directory_plan.directory) or digest(
+            plan["inventory"]
+        ) != digest(directory_plan.inventory):
             raise ConfigurationError(
-                "selected tasks have manual holds; explicitly resume/unhold them first"
+                "resume-missing requires the exact frozen scientific inventory; use a new run for new tasks"
             )
-        # Validate all selected recovery candidates before changing the state.
+        if state.get("active_cohorts"):
+            raise ConfigurationError(
+                "unfinished Tune cohort requires resume or retry --all before selecting missing tasks"
+            )
+        selected = set(directory_plan.selection["tasks"])
+        if not selected <= state["files"].keys():
+            raise ConfigurationError(
+                "resume-missing cannot append tasks to a frozen Tune run"
+            )
+        pending = []
         for row in plan["files"]:
             if row["id"] not in selected:
                 continue
             status = state["files"][row["id"]]["status"]
-            if status in {
-                "paused",
-                "removed",
-                "partial_removed",
-            }:
-                raise ConfigurationError(
-                    f"{row['id']}: manual/stopped state requires explicit resume controls"
-                )
             if status == "completed" and not pending_evaluation(root, row):
                 continue
-            if status not in {"deferred", "queued"}:
-                require_recovery(root, row)
-            activated.append(row["id"])
-        # Membership commits under the same queue lock as active batch-add.
-        # Its immutable extension is visible before execution selection changes.
-        _runtime_initialize(root, plan, state)
-        with runtime.transaction(root) as saved:
-            plan, state = prepare(root, directory_plan, plan, state, saved)
-        for row in plan["files"]:
-            if (
-                row["id"] in selected
-                and state["files"][row["id"]]["status"] == "deferred"
-                and row["id"] not in activated
-            ):
-                activated.append(row["id"])
-        state["selection"] = directory_plan.selection
-        state["submission_tasks"] = activated
-        for identity in activated:
+            if status not in {"queued", "deferred"}:
+                raise ConfigurationError(
+                    "started or failed trials require resume or retry --all, not --resume-missing"
+                )
+            pending.append(row["id"])
+        state.update(selection=directory_plan.selection, submission_tasks=pending)
+        for identity in pending:
             state["files"][identity]["status"] = "queued"
-        if activated:
+        if pending:
             state.update(status="prepared", stage="prepared")
-            state.pop("error", None)
-            # Closed queues reopen; task-specific pause/stop/removal holds survive.
-            runtime.restart(root)
-            with runtime.transaction(root) as saved:
-                for identity in activated:
-                    if identity in saved.get("additions", {}):
-                        saved["additions"][identity]["status"] = "queued"
         _save(root, state)
     return root
 

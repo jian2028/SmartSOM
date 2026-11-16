@@ -112,3 +112,18 @@ def with_protocol(options, **fields):
     if fields:
         raise ValueError(fields)
     return BaseAlgorithm.model_validate(data)
+
+
+def rllib_recipe(method="ppo"):
+    """Framework-free authored input for current public launch contracts."""
+    if method not in {"ppo", "dqn"}:
+        return algorithm_document({"method": method})
+    from pathlib import Path
+
+    import yaml
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / f"configs/algorithms/rllib-base-{method}.yaml"
+    )
+    return yaml.safe_load(source.read_text())

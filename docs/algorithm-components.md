@@ -328,6 +328,12 @@ mechanism and not an exact reproduction of the original paper.
 [`configs/algorithms/justin.yaml`](../configs/algorithms/justin.yaml) selects the
 Justin heuristic component. Default Rule, Justin and custom rule functions read
 named public facts. Random samples legal candidates with its restorable RNG.
+Default Base Rule selects the earliest-due job and then a speed using the critical
+ratio of time to due date over remaining normal processing work: below 1 fast,
+from 1 to below 1.2 normal, and at least 1.2 slow. The current machine's work is
+counted once; later operations use minimum normal work on compatible machines.
+See [ADR0099](decisions/0099-single-critical-ratio-rule.md) for estimation limits
+and legal-mode fallback. The maintained campaign has one Rule, not three speeds.
 There is one current research experiment family; to change methods, create a new
 Experiment definition using the same Scenario/test panel and select its Algorithm.
 Historical comparator experiment directories are not maintained.
@@ -405,6 +411,11 @@ group, owner, stage and bootstrap, never synthetic action candidates. Full netwo
 may declare `CRITIC_SCHEMA` and implement `value(inputs)` to pack named value inputs;
 rollout `forward` and bootstrap must use the same value computation. Builtin vector
 critics use the existing vector contract. DQN does not evaluate a critic projection.
+A critic callable may declare `subject_independent = True` when its output does
+not depend on the entity context. The RLlib multi-agent adapter then computes it
+once per observation frame and gives each agent an independent array. Reuse never
+crosses an observation call, including decisions at the same physical tick;
+unmarked custom critics continue to execute separately for each agent.
 
 `reward` selects a factory `(orders, quality_penalty, **params)` declaring
 `smartsom.reward/v1`. Its object implements `__call__(RewardTransition)`,

@@ -13,7 +13,6 @@ from smartsom.algorithms.base_policy import uses_learning
 from smartsom.config.base_diagnostic import load_inputs, seed_for
 from smartsom.experiments import reservation_runtime as runtime
 from smartsom.experiments.checkpoint_retention import _sync_directory, sync_tree
-from smartsom.experiments.resource_guard import check as check_resources
 
 
 def tuples(value):
@@ -21,7 +20,9 @@ def tuples(value):
 
 
 class ReservationSession:
-    def __init__(self, args):
+    def __init__(self, args, *, defer_evaluation=False, evaluation_only=False):
+        self.defer_evaluation = defer_evaluation
+        self.evaluation_only = evaluation_only
         from smartsom.algorithms.base_policy import build_policy
 
         self.args = args
@@ -93,13 +94,16 @@ class ReservationSession:
         self.tracking = ExperimentTracking(
             self.root, self.ex.tracking, job_type="train"
         )
-        check_resources("model_build", force=True)
-        self.policy = build_policy(
-            self.options,
-            args.seed,
-            numerical_threads=getattr(args, "numerical_threads", 1),
-        )
-        check_resources("model_built", force=True)
+        if evaluation_only:
+            from types import SimpleNamespace
+
+            self.policy = SimpleNamespace(updates=0, learner=None)
+        else:
+            self.policy = build_policy(
+                self.options,
+                args.seed,
+                numerical_threads=getattr(args, "numerical_threads", 1),
+            )
         self.rng = random.Random(seed_for(args.seed, "conditions"))
         self.rows = []
         self.ticks = 0
@@ -118,12 +122,16 @@ class ReservationSession:
             state = json.loads((generation / "state.json").read_text())
             self.rows, self.ticks = state["rows"], state["ticks"]
             self.rng.setstate(tuples(state["condition_rng"]))
-            check_resources("model_load", force=True)
-            self.policy.load(generation / "model.pt")
-            check_resources("model_loaded", force=True)
-            self.publish()
-            self.collect_checkpoints()
+            if evaluation_only:
+                self.policy.updates = self.rows[-1]["updates"] if self.rows else 0
+            else:
+                self.policy.load(generation / "model.pt")
+            if not evaluation_only:
+                self.publish()
+                self.collect_checkpoints()
         else:
+            if evaluation_only:
+                raise ValueError("evaluation requires a complete training checkpoint")
             if (self.root / "last.pt").exists() or (
                 self.root / "episodes.jsonl"
             ).exists():
@@ -141,7 +149,6 @@ class ReservationSession:
     def commit(self):
         from uuid import uuid4
 
-        check_resources("checkpoint_save", force=True)
         generation = self.checkpoints / f"{len(self.rows):08d}-{uuid4().hex}"
         generation.mkdir()
         runtime.write_json(
@@ -155,7 +162,6 @@ class ReservationSession:
         )
         self.policy.save(generation / "model.pt")
         sync_tree(generation)
-        check_resources("checkpoint_publish", force=True)
         runtime.write_json(
             self.checkpoints / "current.json",
             {
@@ -170,7 +176,6 @@ class ReservationSession:
             os.fsync(stream.fileno())
         _sync_directory(self.checkpoints)
         self.publish()
-        check_resources("checkpoint_committed", force=True)
         self.collect_checkpoints()
 
     def restore_committed(self):
@@ -256,6 +261,8 @@ class ReservationSession:
             runtime.write_json(target.with_suffix(".pt.json"), evidence)
 
     def evaluate_periodically(self):
+        if self.defer_evaluation:
+            return
         from smartsom.experiments.reservation_periodic_evaluation import (
             evaluate_periodically,
         )
@@ -411,7 +418,9 @@ class ReservationSession:
                             deadline_unix=None
                             if self.deadline == float("inf")
                             else self.deadline,
-                            numerical_threads=torch.get_num_threads(),
+                            numerical_threads=getattr(
+                                self.args, "numerical_threads", 1
+                            ),
                             training_progress={
                                 "train_seed": self.args.seed,
                                 "episodes": evidence["episodes"],
@@ -460,7 +469,6 @@ class ReservationSession:
             fragment_update_seconds += time.monotonic() - started
 
         try:
-            check_resources("train_rollout", force=True)
             result, rewards, critic = runtime.episode(
                 *self.ex.inputs_for(condition, self.factory, self.workload),
                 self.options,
@@ -504,11 +512,9 @@ class ReservationSession:
             self.restore_committed()
             return {**self.progress(), "done": True}
         update_started = time.monotonic()
-        check_resources("learner_update", force=True)
         self.policy.update(
             rewards, terminal=result["status"] == "completed", final_critic=critic
         )
-        check_resources("learner_updated", force=True)
         result["learner_update_seconds"] = (
             time.monotonic() - update_started + fragment_update_seconds
         )
@@ -526,7 +532,13 @@ class ReservationSession:
         )
         self.rows.append(result)
         self.commit()
-        self.tracking.log({"phase": "train", **result})
+        self.tracking.log(
+            {
+                "phase": "train",
+                **result,
+                "event_id": f"train/episode/{result['episode']}",
+            }
+        )
         self.evaluate_periodically()
         progress = self.progress()
         return {**progress, "done": progress["status"] != "training"}
