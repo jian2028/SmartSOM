@@ -139,24 +139,24 @@ class V2ObservationCodec:
         }
 
     def encode(self, request):
-        from smartsom.representations.v2.network import pack
+        from smartsom.representations.v2.network import pack_arrays
 
         self._validate_request(request)
         if not request.candidates or len(request.candidates) >= self.width:
             raise ValueError("candidate count outside frozen action capacity")
         result = self._empty(request.stage, False)
-        packed = pack([request], critics=None, options=self.options)["stages"][
+        packed = pack_arrays([request], critics=None, options=self.options)["stages"][
             request.stage
         ]
         destination = result["stages"][request.stage]
         if set(packed) - {"indices"} != set(destination):
             raise ValueError("observation fields do not match the frozen social schema")
-        for key, tensor in packed.items():
+        for key, array in packed.items():
             if key == "indices":
                 continue
             if key not in destination:
                 raise ValueError(f"unexpected observation field: {key}")
-            value = tensor[0].numpy()
+            value = array[0]
             if key in SUPPLY_FIELDS:
                 if not np.array_equal(value, np.broadcast_to(value[0], value.shape)):
                     raise ValueError("acceptance supply differs between candidates")

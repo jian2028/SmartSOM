@@ -16,6 +16,13 @@ def pack(requests, *, critics, options):
     return _implementation().pack(requests, critics=critics, options=options)
 
 
+def pack_arrays(requests, *, critics, options):
+    """Build the same numeric fields without creating intermediate Torch tensors."""
+    from smartsom.representations.v2._packing import NumpyArrays, pack
+
+    return pack(requests, critics=critics, options=options, arrays=NumpyArrays)
+
+
 def create_network(*, group, options, value_head, social_enabled=None, social=None):
     return _implementation().create_network(
         group=group,

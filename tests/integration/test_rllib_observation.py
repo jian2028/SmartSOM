@@ -14,6 +14,36 @@ from smartsom.representations.v2.network import pack
 from tests.unit.test_base_reservations import sim_with
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        (None,),
+        ("1.5",),
+        (True, False),
+        (2**54 + 2**30 + 1,),
+        (2**63, 0),
+        (2**70, 0.1),
+        (2**63, -1),
+        (float("inf"), -0.0),
+    ],
+)
+def test_numpy_numeric_fields_keep_torch_conversion_boundaries(values):
+    import torch
+
+    from smartsom.representations.v2._packing import NumpyArrays
+
+    try:
+        expected = torch.tensor(values).to(torch.float32).numpy()
+    except (TypeError, ValueError, RuntimeError, OverflowError) as error:
+        with pytest.raises(type(error)):
+            NumpyArrays.tensor(values)
+    else:
+        # Candidate/peer destinations are float32 in both packing backends.
+        actual = np.asarray(NumpyArrays.tensor(values), dtype=np.float32)
+        np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(np.signbit(actual), np.signbit(expected))
+
+
 @pytest.mark.parametrize("limit", [3, 1000])
 @pytest.mark.parametrize("fragment_length", [1, 7])
 def test_event_waits_preserve_cost_and_official_pending_agent_rewards(
@@ -166,7 +196,7 @@ def test_rule_action_spaces_do_not_scale_with_physical_job_pairs():
 
 
 @pytest.mark.parametrize("fusion", ["base", "attention", "concat"])
-def test_real_observations_and_waits_preserve_payload(fusion):
+def test_real_observations_and_waits_preserve_payload(fusion, monkeypatch):
     root = Path(__file__).resolve().parents[2]
     doc = yaml.safe_load((root / "configs/algorithms/v2-base-ddqn.yaml").read_text())
     social = (
@@ -234,7 +264,18 @@ def test_real_observations_and_waits_preserve_payload(fusion):
                     )
                 assert request.inputs["social"] == expected
             encoder = codec(request)
-            obs = encoder.encode(request)
+            if checks == 0:
+                import torch
+
+                def forbidden_tensor_allocation(*args, **kwargs):
+                    pytest.fail("numeric environment encoding allocated a Torch tensor")
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(torch, "tensor", forbidden_tensor_allocation)
+                    patch.setattr(torch, "zeros", forbidden_tensor_allocation)
+                    obs = encoder.encode(request)
+            else:
+                obs = encoder.encode(request)
             if (
                 not checked_distinct_supply
                 and fusion != "base"
@@ -262,6 +303,11 @@ def test_real_observations_and_waits_preserve_payload(fusion):
                 checked_distinct_supply = True
             examples.setdefault(encoder.group, {})["production"] = obs
             if checks == 0:
+                for invalid in (None, "1.5"):
+                    inputs = dict(request.inputs)
+                    inputs["context"] = (invalid, *inputs["context"][1:])
+                    with pytest.raises((TypeError, ValueError)):
+                        encoder.encode(replace(request, inputs=inputs))
                 for bad in (
                     replace(request, group="wrong"),
                     replace(request, stage="wrong"),

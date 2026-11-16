@@ -26,6 +26,13 @@ social supply within that observation callback. Neither reuse spans a decision
 or a physical advance; candidate order, tie-breaking and numerical fields remain
 unchanged.
 
+V2 numeric observations and Torch callers share one packing layout with their
+respective array allocation operations. The RLlib environment builds ordinary
+numeric fields directly in NumPy, avoiding intermediate Torch allocation and
+conversion. Unusual custom values retain the original Torch conversion rules. Shapes,
+float32 observations, masks, ordering and fixed-capacity padding are unchanged;
+the official connector still owns conversion to model inputs.
+
 Observation components construct statistics and fixed input data; network
 components construct learned encodings and masked action scores. BaseInputs holds
 Base context, four sets and candidate vectors; implicit SL appends peer relations

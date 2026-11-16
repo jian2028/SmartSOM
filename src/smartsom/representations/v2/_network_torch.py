@@ -198,127 +198,15 @@ class Network(nn.Module):
 
 
 def _peers(relations, width, *, field="peers"):
-    b, c = len(relations), len(relations[0])
-    p = max(1, max(len(row[field]) for rows in relations for row in rows))
-    data, mask = torch.zeros(b, c, p, width), torch.zeros(b, c, p, dtype=torch.bool)
-    for i, rows in enumerate(relations):
-        for j, relation in enumerate(rows):
-            values = relation[field]
-            if values:
-                data[i, j, : len(values)] = torch.tensor(values)
-                mask[i, j, : len(values)] = True
-    return data, mask
+    from smartsom.representations.v2._packing import peers_array
+
+    return peers_array(relations, width, arrays=torch, field=field)
 
 
 def pack(requests, *, critics, options):
-    width = max(len(r.candidates) for r in requests)
-    result = {"size": len(requests), "width": width, "stages": {}}
-    if critics is not None:
-        result["critic"] = torch.tensor(critics, dtype=torch.float32)
-    for stage in dict.fromkeys(r.stage for r in requests):
-        indices = [i for i, r in enumerate(requests) if r.stage == stage]
-        rows = [requests[i] for i in indices]
-        group = rows[0].group
-        point = group + "." + stage
-        n = len(rows)
-        size = FEATURES[point] + len(CATALOG[point])
-        data = {
-            "indices": torch.tensor(indices),
-            "context": torch.tensor(
-                [r.inputs["context"] for r in rows], dtype=torch.float32
-            ),
-            "candidates": torch.zeros(n, width, size),
-            "modes": torch.zeros(n, width, 3),
-            "mask": torch.zeros(n, width, dtype=torch.bool),
-        }
-        for i, row in enumerate(rows):
-            count = len(row.candidates)
-            data["candidates"][i, :count] = torch.tensor(row.inputs["candidates"])
-            data["mask"][i, :count] = True
-            if group == "machine":
-                data["modes"][i, :count] = torch.tensor(row.inputs["modes"])
-        if rows[0].inputs["social"]:
-            relations = [
-                [*r.inputs["social"], *({} for _ in range(width - len(r.candidates)))]
-                for r in rows
-            ]
-            if group == "dispatcher":
-                peers = [
-                    [{"peers": r.get("peers", ())} for r in row] for row in relations
-                ]
-                data["peers"], data["peer_mask"] = _peers(peers, 3)
-            elif group in ("post", "input") and stage == "accept":
-                jobs = max(
-                    1, max(len(r.get("jobs", ())) for row in relations for r in row)
-                )
-                peers = max(
-                    1,
-                    max(
-                        (
-                            len(j["downstream"]["peers"])
-                            for row in relations
-                            for r in row
-                            for j in r.get("jobs", ())
-                        ),
-                        default=0,
-                    ),
-                )
-                data.update(
-                    jobs=torch.zeros(n, width, jobs, 4 if group == "post" else 3),
-                    job_mask=torch.zeros(n, width, jobs, dtype=torch.bool),
-                    job_peers=torch.zeros(n, width, jobs, peers, 9),
-                    job_peer_mask=torch.zeros(n, width, jobs, peers, dtype=torch.bool),
-                    job_meta=torch.zeros(n, width, jobs, 2),
-                    job_count=torch.zeros(n, width, 1),
-                )
-                for i, row in enumerate(relations):
-                    for k, relation in enumerate(row):
-                        supply = relation.get("jobs", ())
-                        data["job_count"][i, k, 0] = len(supply) / options.count_scale
-                        for j, job in enumerate(supply):
-                            station = job["downstream"]
-                            count = len(station["peers"])
-                            data["jobs"][i, k, j] = torch.tensor(job["condition"])
-                            data["job_mask"][i, k, j] = True
-                            data["job_meta"][i, k, j] = torch.tensor(
-                                [count / options.count_scale, station["terminal"]]
-                            )
-                            if count:
-                                data["job_peers"][i, k, j, :count] = torch.tensor(
-                                    station["peers"]
-                                )
-                                data["job_peer_mask"][i, k, j, :count] = True
-            else:
-                for name in ("downstream", "alternatives"):
-                    if name == "alternatives" and not (
-                        group == "pre" and stage == "accept"
-                    ):
-                        continue
-                    peers = [
-                        [r.get(name, {"peers": (), "terminal": 0.0}) for r in row]
-                        for row in relations
-                    ]
-                    data[name], data[name + "_mask"] = _peers(peers, 9)
-                    count = [
-                        [[len(r["peers"]) / options.count_scale] for r in row]
-                        for row in peers
-                    ]
-                    data[name + "_count"] = torch.tensor(count)
-                    if name == "downstream":
-                        data[name + "_meta"] = torch.tensor(
-                            [
-                                [
-                                    [
-                                        len(r["peers"]) / options.count_scale,
-                                        r["terminal"],
-                                    ]
-                                    for r in row
-                                ]
-                                for row in peers
-                            ]
-                        )
-        result["stages"][stage] = data
-    return result
+    from smartsom.representations.v2._packing import pack as pack_arrays
+
+    return pack_arrays(requests, critics=critics, options=options, arrays=torch)
 
 
 def create_network(*, group, options, value_head, social_enabled=None, social=None):
