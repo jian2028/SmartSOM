@@ -56,6 +56,22 @@ information. Complete recipes are `base-ppo.yaml`, `base-dqn.yaml`, `sl-ppo.yaml
 `sl-dqn.yaml` under `configs/algorithms/`. Experiment references one algorithm
 and a reusable Scenario.
 
+The shared mover accepts `params: {claim_resting_ports: true}`; the value must
+be a YAML boolean. A vehicle whose destination is ready may then choose a port on
+which another vehicle is resting, and displaces it. Resting means neither ready
+nor in service: a vehicle with no target, or one whose own target cannot be
+served yet. Free ports are still preferred, and a vehicle that is ready or in
+service is never displaced. Without the option, a vehicle left on a port after
+its last task can strand cargo for that port until the drain deadline.
+
+The default is `false` because frozen reference traces pin the earlier movement.
+The option changes the physical trace of most episodes, and it is not uniformly
+better: in a dead-end pocket the claiming vehicle can hold the only exit of the
+vehicle it wants to displace. Within one comparison every arm, including the Rule
+and Random references, must use the same setting, and drain limits or budgets
+calibrated under one setting must not be reused under the other. The setting is
+part of the algorithm's scientific identity, so runs record which one they used.
+
 Changing `pre.accept.allow_stop` or `post.accept.allow_stop` creates an action-space
 ablation, not a new learner file. STOP ends the current acceptance loop. It does
 not delay service by a tick. No legal candidate means natural waiting regardless
