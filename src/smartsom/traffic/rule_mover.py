@@ -14,8 +14,11 @@ class SharedMover:
     reservations are never changed by traffic coordination.
     """
 
-    def __init__(self, routes):
+    def __init__(self, routes, claim_resting_ports=False):
         self.routes = routes
+        # Off by default: frozen traces pin the earlier behaviour, where a ready
+        # vehicle never chose a port that any other vehicle stood on.
+        self.claim_resting_ports = claim_resting_ports
         self.wait = {}
         self.last = {}
         self.executed = 0
@@ -112,18 +115,38 @@ class SharedMover:
                 continue
             owner = a["owner"]
             ports = routes.ports[owner] if owner else ()
+            # A port held by a vehicle that is neither ready nor in service is
+            # still a goal: that vehicle is only resting there, and reserving the
+            # port displaces it. Free ports are preferred.
+            resting = (
+                {
+                    c
+                    for c in ports
+                    if occupant.get(c, v) != v
+                    and not vehicles[occupant[c]]["ready"]
+                    and not vehicles[occupant[c]]["service"]
+                }
+                if self.claim_resting_ports
+                else ()
+            )
             choices = (
                 [
                     c
                     for c in ports
-                    if c not in chosen_goals and (c not in occupant or occupant[c] == v)
+                    if c not in chosen_goals
+                    and (c not in occupant or occupant[c] == v or c in resting)
                 ]
                 if a["ready"]
                 else []
             )
             if choices:
                 goal = min(
-                    choices, key=lambda c: (routes.distances((c,))[current[v]], c)
+                    choices,
+                    key=lambda c: (
+                        c in resting,
+                        routes.distances((c,))[current[v]],
+                        c,
+                    ),
                 )
             else:
                 # A real free road cell, never a virtual waiting capacity. Keep
@@ -267,8 +290,8 @@ class SharedMover:
         }
 
 
-def create_mover(*, routes, seed=0):
-    return SharedMover(routes)
+def create_mover(*, routes, seed=0, claim_resting_ports=False):
+    return SharedMover(routes, claim_resting_ports=claim_resting_ports)
 
 
 create_mover.CONTRACT = "smartsom.mover/v1"
