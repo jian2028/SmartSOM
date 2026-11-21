@@ -25,6 +25,22 @@ from smartsom.experiments.resource_guard import check as check_resources
 CURRENT = ContextVar("smartsom_control", default=None)
 ACTIVE = {"running", "stop_requested", "stopping"}
 _REQUEST_CACHE = {}
+_PAUSE_CACHE = {}
+_RESOLVED = {}
+
+
+def _resolved(directory):
+    """Resolve an absolute run directory once per process.
+
+    Polling resolves the same roots on every simulation step, and resolving
+    walks each path component with a system call.
+    """
+    if not directory.is_absolute():
+        return directory.resolve()
+    found = _RESOLVED.get(directory)
+    if found is None:
+        found = _RESOLVED[directory] = directory.resolve()
+    return found
 
 
 def write_json(path, value):
@@ -68,13 +84,26 @@ def request_pause(directory):
 def clear_pause(directory):
     """Withdraw the execution request; durable scheduler intent is separate."""
     native_path(Path(directory) / "control/pause.json").unlink(missing_ok=True)
+    _PAUSE_CACHE.clear()
 
 
-def pause_requested(root=None):
+def pause_requested(root=None, *, fresh=False):
+    """Read matching live pause requests; polled like stop requests.
+
+    Boundaries run once per simulation step, so an uncached read walks every
+    ancestor directory thousands of times per episode.
+    """
     scope = CURRENT.get()
     roots = [Path(root)] if root is not None else list(scope.roots) if scope else []
     for directory in roots:
-        for parent in (directory.resolve(), *directory.resolve().parents):
+        directory = _resolved(directory)
+        cached = _PAUSE_CACHE.get(directory)
+        if not fresh and cached and time.monotonic() - cached[0] < 0.2:
+            if cached[1]:
+                return True
+            continue
+        found = False
+        for parent in (directory, *directory.parents):
             owner = read(parent)
             path = native_path(parent / "control/pause.json")
             if owner and owner["status"] in ACTIVE and path.is_file():
@@ -82,7 +111,11 @@ def pause_requested(root=None):
                     json.loads(path.read_text(encoding="utf-8")).get("id")
                     == owner["id"]
                 ):
-                    return True
+                    found = True
+                    break
+        _PAUSE_CACHE[directory] = (time.monotonic(), found)
+        if found:
+            return True
     return False
 
 
@@ -269,14 +302,14 @@ def requested(root=None, *, fresh=False):
     scope = CURRENT.get()
     roots = [Path(root)] if root is not None else list(scope.roots) if scope else []
     for directory in roots:
-        directory = directory.resolve()
+        directory = _resolved(directory)
         cached = _REQUEST_CACHE.get(directory)
         if not fresh and cached and time.monotonic() - cached[0] < 0.2:
             if cached[1]:
                 return True
             continue
         found = False
-        for parent in (directory.resolve(), *directory.resolve().parents):
+        for parent in (directory, *directory.parents):
             owner = read(parent)
             request = parent / "control/stop.json"
             if owner and owner["status"] in ACTIVE and native_path(request).is_file():
@@ -299,7 +332,7 @@ def boundary(root=None, *, fresh=False):
     stopping = requested(root, fresh=True) if fresh else requested(root)
     if stopping:
         raise StopRequested("stop requested at a safe boundary")
-    if pause_requested(root):
+    if pause_requested(root, fresh=fresh):
         raise PauseRequested("pause requested at a safe checkpoint boundary")
 
 
@@ -500,6 +533,7 @@ class Scope:
                 self.deletion_blockers.add("run has no isolated driver session")
             self._publish_deletion_evidence()
             _REQUEST_CACHE.pop(root, None)
+            _PAUSE_CACHE.pop(root, None)
             write_json(root / "control/owner.json", owner)
             if self.thread is None:
                 self.thread = threading.Thread(target=self.watch, daemon=True)
