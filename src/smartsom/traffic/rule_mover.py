@@ -15,6 +15,9 @@ class SharedMover:
     """
 
     def __init__(self, routes, claim_resting_ports=False):
+        if not isinstance(claim_resting_ports, bool):
+            # A quoted "false" in a configuration file would otherwise enable it.
+            raise ValueError("claim_resting_ports must be true or false")
         self.routes = routes
         # Off by default: frozen traces pin the earlier behaviour, where a ready
         # vehicle never chose a port that any other vehicle stood on.
@@ -116,8 +119,9 @@ class SharedMover:
             owner = a["owner"]
             ports = routes.ports[owner] if owner else ()
             # A port held by a vehicle that is neither ready nor in service is
-            # still a goal: that vehicle is only resting there, and reserving the
-            # port displaces it. Free ports are preferred.
+            # still a goal: that vehicle is only resting there, whether it has no
+            # target or one that cannot be served yet, and reserving the port
+            # displaces it. Free ports are preferred.
             resting = (
                 {
                     c
@@ -126,7 +130,7 @@ class SharedMover:
                     and not vehicles[occupant[c]]["ready"]
                     and not vehicles[occupant[c]]["service"]
                 }
-                if self.claim_resting_ports
+                if self.claim_resting_ports and a["ready"]
                 else ()
             )
             choices = (
