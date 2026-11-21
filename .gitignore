@@ -47,3 +47,6 @@ htmlcov/
 /experiments/v2-diagnostics/**/results
 /experiments/v2-diagnostics/**/runs
 /experiments/v2-diagnostics/**/artifacts
+
+# Claude Code local settings
+.claude/settings.local.json

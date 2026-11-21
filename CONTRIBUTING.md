@@ -11,17 +11,19 @@ uv run ruff format --check .
 uv run pytest -q
 ```
 
-Do not install optional solver, learning, multi-agent, or tracking dependencies
-until an approved change introduces the corresponding adapter.
+`uv sync --locked` installs the minimal environment used for lint and the
+core tests. Learning, tuning, tracking and Studio paths need their extras from
+`pyproject.toml`; the README shows the usual research environment
+(`uv sync --locked --extra learning --extra cpu --extra wandb`). Add no new
+dependency or extra until the code that uses it is part of the same change.
 
 See [tiered CI and test ownership](docs/ci.md) for automatic impact selection,
 full verification, local reproduction and requirements for new tests.
 
 ## Branches
 
-After the initial repository scaffold, keep `main` usable and work on one
-short-lived branch per logical objective. Use readable kebab-case names with
-one of these prefixes:
+Keep `main` usable and work on one short-lived branch per logical objective.
+Use readable kebab-case names with one of these prefixes:
 
 ```text
 feat/<topic>
@@ -33,7 +35,11 @@ perf/<topic>
 chore/<topic>
 ci/<topic>
 experiment/<topic>
+codex/<topic>
 ```
+
+`codex/<topic>` is for branches an agent session creates. The pull request
+title still carries the Conventional Commit type.
 
 Do not create a long-lived `develop` branch. Experiment identity belongs in
 configuration, run IDs, manifests, and Git source identities rather than in
@@ -47,17 +53,17 @@ Use Conventional Commits:
 type(scope): imperative summary
 ```
 
-Initial scopes are `repo`, `domain`, `engine`, `dispatch`, `modules`,
-`algorithms`, `experiments`, `trace`, `telemetry`, `docs`, and `ci`.
+Scopes in use are `repo`, `domain`, `engine`, `algorithms`, `learning`,
+`experiments`, `evaluation`, `telemetry`, `studio`, `config`, `cli`, `docs`,
+and `ci`. Prefer one of these; add a scope only for a new top-level area.
 
 Examples:
 
 ```text
-chore(repo): initialize project scaffold
-feat(domain): define static FJSP specifications
 feat(engine): implement deterministic event calendar
-fix(dispatch): reject infeasible machine assignments
-test(trace): verify deterministic replay
+fix(experiments): keep paused trials out of the admission queue
+perf(algorithms): reuse shared critic features within a frame
+test(telemetry): verify recorder isolation
 docs(architecture): clarify module boundaries
 ```
 
@@ -76,8 +82,12 @@ supporting tests and required documentation with the behavior they verify.
 - Split unrelated objectives into separate branches and pull requests rather
   than combining them in one squash.
 
-The first scaffold commit is the sole bootstrap exception and may establish
-`main` directly because no base commit exists yet.
+## Decision Records
+
+`docs/decisions/README.md` indexes the records and says when one is needed.
+Give a new record the next number after the highest one on `main` at merge
+time, and renumber on the branch if another record landed first. Add its row
+to the index in the same change.
 
 ## Experiment Source Identity
 
