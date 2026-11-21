@@ -29,15 +29,17 @@ _PAUSE_CACHE = {}
 _RESOLVED = {}
 
 
-def _resolved(directory):
-    """Resolve an absolute run directory once per process.
+def _resolved(directory, *, fresh=False):
+    """Resolve an absolute run directory, reusing the result between fresh reads.
 
     Polling resolves the same roots on every simulation step, and resolving
-    walks each path component with a system call.
+    walks each path component with a system call. A fresh read resolves again,
+    so a retargeted link is followed from the next fresh boundary on. Relative
+    paths depend on the working directory and are never remembered.
     """
     if not directory.is_absolute():
         return directory.resolve()
-    found = _RESOLVED.get(directory)
+    found = None if fresh else _RESOLVED.get(directory)
     if found is None:
         found = _RESOLVED[directory] = directory.resolve()
     return found
@@ -74,6 +76,7 @@ def request_pause(directory):
     ):
         raise ValueError("no verified active task owner for pause")
     write_json(root / "control/pause.json", {"id": owner["id"]})
+    _PAUSE_CACHE.clear()
     return {
         "directory": str(root),
         "status": "pause_requested",
@@ -91,12 +94,13 @@ def pause_requested(root=None, *, fresh=False):
     """Read matching live pause requests; polled like stop requests.
 
     Boundaries run once per simulation step, so an uncached read walks every
-    ancestor directory thousands of times per episode.
+    ancestor directory thousands of times per episode. Within the polling
+    interval a request made or withdrawn by another process is not yet seen.
     """
     scope = CURRENT.get()
     roots = [Path(root)] if root is not None else list(scope.roots) if scope else []
     for directory in roots:
-        directory = _resolved(directory)
+        directory = _resolved(directory, fresh=fresh)
         cached = _PAUSE_CACHE.get(directory)
         if not fresh and cached and time.monotonic() - cached[0] < 0.2:
             if cached[1]:
@@ -302,7 +306,7 @@ def requested(root=None, *, fresh=False):
     scope = CURRENT.get()
     roots = [Path(root)] if root is not None else list(scope.roots) if scope else []
     for directory in roots:
-        directory = _resolved(directory)
+        directory = _resolved(directory, fresh=fresh)
         cached = _REQUEST_CACHE.get(directory)
         if not fresh and cached and time.monotonic() - cached[0] < 0.2:
             if cached[1]:

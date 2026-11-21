@@ -162,12 +162,13 @@ def case_results(settings, tasks, prepared, *, workers, on_progress, capacity=No
     try:
         resize()
         for expected in tasks:
-            # Case boundaries are rare, so they read requests without the polling
-            # cache: a pause requested after one receipt admits no further case.
+            # The parent checks a few times per second, so it reads requests
+            # without the polling cache: a pause requested after one receipt
+            # admits and commits no further case.
             control.boundary(settings["output"], fresh=True)
             index = expected["index"]
             while index not in completed:
-                control.boundary(settings["output"])
+                control.boundary(settings["output"], fresh=True)
                 resize()
                 connections = list(active)
                 ready = wait(

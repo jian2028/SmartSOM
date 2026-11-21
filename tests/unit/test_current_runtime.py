@@ -855,6 +855,98 @@ def test_native_worker_resources_reject_invalid_process_count(tmp_path):
         NativeScheduler._requirements(None, {"root": str(tmp_path)})
 
 
+def _logging_case_worker(connection, cancelled, settings):
+    import time
+
+    log = Path(settings["output"]) / "admitted.log"
+    while not cancelled.is_set():
+        if not connection.poll(0.01):
+            continue
+        task = connection.recv()
+        if task is None:
+            break
+        with log.open("a") as handle:
+            handle.write(f"{task['index']}\n")
+        time.sleep(0.01)
+        connection.send(("result", task["index"], task["index"]))
+    connection.close()
+
+
+def test_pause_after_first_commit_admits_no_further_case(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from smartsom.experiments import control, parallel_evaluation
+    from smartsom.experiments.control import write_json
+
+    monkeypatch.setattr(parallel_evaluation, "_worker", _logging_case_worker)
+    (tmp_path / "control").mkdir()
+    write_json(tmp_path / "control/owner.json", {"id": "run", "status": "running"})
+    prepared = (None, None, None, SimpleNamespace(component_items=lambda: []))
+    committed = []
+    with pytest.raises(control.PauseRequested):
+        for index, _ in parallel_evaluation.case_results(
+            {"output": tmp_path},
+            [{"index": i} for i in range(10)],
+            prepared,
+            workers=3,
+            on_progress=lambda *_: None,
+        ):
+            committed.append(index)
+            if index == 0:
+                write_json(tmp_path / "control/pause.json", {"id": "run"})
+    admitted = [int(row) for row in (tmp_path / "admitted.log").read_text().split()]
+    assert committed == [0]
+    # Three workers hold cases 0-2 before the pause; nothing beyond them starts.
+    assert max(admitted) <= 2
+
+
+def _pausing_case_worker(connection, cancelled, settings):
+    import time
+
+    from smartsom.experiments.control import write_json
+
+    output = Path(settings["output"])
+    while not cancelled.is_set():
+        if not connection.poll(0.01):
+            continue
+        task = connection.recv()
+        if task is None:
+            break
+        if task["index"] == 1:
+            while not (output / "yielded-0").exists():
+                time.sleep(0.005)
+            time.sleep(0.03)
+            write_json(output / "control/pause.json", {"id": "run"})
+            time.sleep(0.03)
+        connection.send(("result", task["index"], task["index"]))
+    connection.close()
+
+
+def test_pause_while_waiting_does_not_commit_the_next_case(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from smartsom.experiments import control, parallel_evaluation
+    from smartsom.experiments.control import write_json
+
+    monkeypatch.setattr(parallel_evaluation, "_worker", _pausing_case_worker)
+    (tmp_path / "control").mkdir()
+    write_json(tmp_path / "control/owner.json", {"id": "run", "status": "running"})
+    prepared = (None, None, None, SimpleNamespace(component_items=lambda: []))
+    committed = []
+    with pytest.raises(control.PauseRequested):
+        for index, _ in parallel_evaluation.case_results(
+            {"output": tmp_path},
+            [{"index": i} for i in range(6)],
+            prepared,
+            workers=2,
+            on_progress=lambda *_: None,
+        ):
+            committed.append(index)
+            if index == 0:
+                (tmp_path / "yielded-0").write_text("x")
+    assert committed == [0]
+
+
 def _resizing_case_worker(connection, cancelled, settings):
     import os
     import time
