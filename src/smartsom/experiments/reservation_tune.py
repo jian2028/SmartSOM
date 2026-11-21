@@ -83,7 +83,7 @@ def publish_calibration_progress(root, progress):
     """Expose the current measured probe without inventing a global ETA."""
     from smartsom.telemetry.runtime import CURRENT
 
-    boundary(root)
+    boundary(root, fresh=True)
     result = {
         "status": "calibrating",
         "phase": "performance_calibration",
@@ -251,7 +251,7 @@ def execute(root):
                 self.limits.restore_original_limits()
 
         def step(self):
-            boundary(root)
+            boundary(root, fresh=True)
             result = self.session.step()
             if result["done"]:
                 self.session.final_evaluate()
@@ -293,7 +293,7 @@ def execute(root):
             broker.drain_shared()
 
         def on_step_begin(self, iteration, trials, **info):
-            boundary(root)
+            boundary(root, fresh=True)
             if time.time() >= deadline:
                 raise TimeoutError("original Tune wall deadline reached")
             broker.refresh()

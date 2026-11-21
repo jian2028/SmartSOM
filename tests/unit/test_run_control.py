@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -242,13 +243,118 @@ def test_pause_request_is_generation_scoped_and_stop_has_priority(tmp_path):
     write_json(tmp_path / "control/pause.json", {"id": "new"})
     assert not control.requested(tmp_path, fresh=True)
     with pytest.raises(control.PauseRequested):
-        control.boundary(tmp_path)
+        control.boundary(tmp_path, fresh=True)
     write_json(tmp_path / "control/stop.json", {"id": "new"})
     with pytest.raises(control.StopRequested) as raised:
         control.boundary(tmp_path, fresh=True)
     assert not isinstance(raised.value, control.PauseRequested)
     control.clear_pause(tmp_path)
     assert not control.pause_requested(tmp_path)
+
+
+def test_pause_polling_is_cached_like_stop_polling(tmp_path, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(control.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(control, "_PAUSE_CACHE", {})
+    monkeypatch.setattr(control, "_REQUEST_CACHE", {})
+    (tmp_path / "control").mkdir()
+    write_json(tmp_path / "control/owner.json", {"id": "run", "status": "running"})
+    # A request for another generation is not a pause, on the cached path too.
+    write_json(tmp_path / "control/pause.json", {"id": "old"})
+    assert control.pause_requested(tmp_path) is False
+    write_json(tmp_path / "control/pause.json", {"id": "run"})
+    # The negative read is reused inside the polling interval.
+    assert control.pause_requested(tmp_path) is False
+    control.boundary(tmp_path)
+    now[0] += 0.25
+    with pytest.raises(control.PauseRequested):
+        control.boundary(tmp_path)
+    assert control.pause_requested(tmp_path) is True
+
+
+def test_fresh_pause_read_bypasses_cache_and_clear_pause_resets_it(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(control.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(control, "_PAUSE_CACHE", {})
+    (tmp_path / "control").mkdir()
+    write_json(tmp_path / "control/owner.json", {"id": "run", "status": "running"})
+    assert control.pause_requested(tmp_path) is False
+    write_json(tmp_path / "control/pause.json", {"id": "run"})
+    assert control.pause_requested(tmp_path, fresh=True) is True
+    assert control.pause_requested(tmp_path) is True
+    control.clear_pause(tmp_path)
+    assert control.pause_requested(tmp_path) is False
+
+
+def test_request_pause_is_seen_at_once_by_the_requesting_process(tmp_path, monkeypatch):
+    monkeypatch.setattr(control.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(control, "_PAUSE_CACHE", {})
+    monkeypatch.setattr(control, "processes", lambda: {})
+    monkeypatch.setattr(control, "alive", lambda identity, table: True)
+    root = tmp_path.resolve()
+    (root / "control").mkdir()
+    write_json(
+        root / "control/owner.json",
+        {"id": "run", "status": "running", "root": str(root), "owner": {"pid": 1}},
+    )
+    control.boundary(root)
+    control.request_pause(root)
+    with pytest.raises(control.PauseRequested):
+        control.boundary(root)
+
+
+def test_rebinding_a_scope_drops_the_cached_pause_read(tmp_path):
+    (tmp_path / "control").mkdir()
+    assert control.pause_requested(tmp_path) is False
+    scope = control.Scope()
+    scope.bind(tmp_path)
+    try:
+        write_json(
+            tmp_path / "control/pause.json", {"id": control.read(tmp_path)["id"]}
+        )
+        # Correct code answers True however long binding took; a kept negative
+        # read would answer False inside the polling interval.
+        assert control.pause_requested(tmp_path) is True
+    finally:
+        scope.closed.set()
+        scope.thread.join()
+
+
+def test_fresh_read_follows_a_retargeted_run_directory_link(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "_PAUSE_CACHE", {})
+    monkeypatch.setattr(control, "_RESOLVED", {})
+    for name in ("first", "second"):
+        (tmp_path / name / "control").mkdir(parents=True)
+        write_json(
+            tmp_path / name / "control/owner.json",
+            {"id": name, "status": "running"},
+        )
+    write_json(tmp_path / "second/control/pause.json", {"id": "second"})
+    link = tmp_path / "run"
+    link.symlink_to(tmp_path / "first", target_is_directory=True)
+    control.boundary(link)
+    link.unlink()
+    link.symlink_to(tmp_path / "second", target_is_directory=True)
+    with pytest.raises(control.PauseRequested):
+        control.boundary(link, fresh=True)
+
+
+def test_relative_run_directory_is_resolved_on_every_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "_PAUSE_CACHE", {})
+    monkeypatch.setattr(control, "_RESOLVED", {})
+    for name in ("first", "second"):
+        (tmp_path / name / "run/control").mkdir(parents=True)
+        write_json(
+            tmp_path / name / "run/control/owner.json",
+            {"id": name, "status": "running"},
+        )
+    write_json(tmp_path / "second/run/control/pause.json", {"id": "second"})
+    monkeypatch.chdir(tmp_path / "first")
+    assert control.pause_requested(Path("run")) is False
+    monkeypatch.chdir(tmp_path / "second")
+    assert control.pause_requested(Path("run")) is True
+    assert control._RESOLVED == {}
 
 
 def test_real_pause_exits_worker_after_saved_boundary(tmp_path):

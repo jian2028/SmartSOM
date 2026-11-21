@@ -296,7 +296,7 @@ class ReservationSession:
     def progress(self, extra=None):
         from smartsom.experiments.control import boundary
 
-        boundary(self.root)
+        boundary(self.root, fresh=True)
         status = (
             "completed"
             if self.budget_done()
