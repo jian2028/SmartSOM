@@ -28,7 +28,8 @@ class EvaluationLease:
             for child in psutil.Process().children(recursive=True):
                 try:
                     self.sampler_memory += child.memory_info().rss
-                except psutil.NoSuchProcess:
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    # Not a sampler: gone, or the setuid `ps` of a process-table read.
                     pass
         self.workers = workers
         self.cpus = cpus
