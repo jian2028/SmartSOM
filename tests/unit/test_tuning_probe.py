@@ -168,6 +168,47 @@ def test_timeout_reaps_only_owned_processes_and_children(tmp_path):
         external.wait(timeout=2)
 
 
+def test_observer_skips_a_child_whose_memory_it_cannot_read(tmp_path, monkeypatch):
+    import pickle
+    from types import SimpleNamespace
+
+    import psutil
+
+    from smartsom.experiments import tuning_probe
+
+    class Process:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def create_time(self):
+            return 1.0
+
+        def children(self, recursive):
+            return [Process(2), Process(3)]
+
+        def memory_info(self):
+            if self.pid == 2:
+                raise psutil.AccessDenied(self.pid)
+            return SimpleNamespace(rss=5)
+
+    monkeypatch.setattr(psutil, "Process", Process)
+    (tmp_path / "monitor.pkl").write_bytes(pickle.dumps(None))
+    (tmp_path / "observer-stop.json").write_text("{}")
+    request = {
+        "roots": [1],
+        "deadline": time.monotonic() + 30,
+        "poll": 0.001,
+        "gpu": False,
+        "monitor_blob": str(tmp_path / "monitor.pkl"),
+    }
+    (tmp_path / "observer-request.json").write_text(json.dumps(request))
+    tuning_probe._observe(tmp_path)
+    stats = json.loads((tmp_path / "observer.json").read_text())
+    assert "error" not in stats
+    assert (stats["samples"], stats["peak_memory"]) == (1, 10)
+    assert {member["pid"] for member in stats["known_processes"]} == {1, 2, 3}
+
+
 def test_cancel_joins_processes_without_timeout_threads(tmp_path):
     pytest.importorskip("psutil")
     frozen = group(sampling_processes=0)

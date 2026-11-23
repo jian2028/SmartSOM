@@ -605,7 +605,8 @@ def _observe(directory):
                         if process.create_time() == created:
                             total += process.memory_info().rss
                             owned[pid] = created
-                    except psutil.NoSuchProcess:
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        # Gone, or a setuid child such as `ps` on macOS.
                         pass
                 known[root] = members
                 trial_rss.append(total)
