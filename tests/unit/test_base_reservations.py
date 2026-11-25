@@ -390,6 +390,190 @@ def test_shared_mover_displaces_idle_vehicles_without_collision():
     assert vehicles["agv_00"]["cell"] in sim.protocol.routes.ports["output"]
 
 
+@pytest.mark.parametrize("claim_resting_ports", [False, True])
+def test_ready_vehicle_displaces_idle_vehicle_resting_on_its_only_port(
+    claim_resting_ports,
+):
+    """An idle vehicle left on a corner port must not strand cargo for that port.
+
+    The idle vehicle's nearest parking cell lies behind the loaded vehicle, and its
+    other neighbour is a parked vehicle, so without the option neither moves. The
+    default keeps that behaviour because frozen traces pin it.
+    """
+    from collections import deque
+    from types import SimpleNamespace
+
+    from smartsom.domain.production import MOVES
+
+    cells = tuple((x, y) for x in range(4) for y in range(3))
+    neighbors = {
+        c: tuple(
+            n
+            for n in (
+                (c[0] + 1, c[1]),
+                (c[0] - 1, c[1]),
+                (c[0], c[1] + 1),
+                (c[0], c[1] - 1),
+            )
+            if n in cells
+        )
+        for c in cells
+    }
+
+    def distances(goals):
+        found = dict.fromkeys(goals, 0)
+        queue = deque(goals)
+        while queue:
+            c = queue.popleft()
+            for n in neighbors[c]:
+                if n not in found:
+                    found[n] = found[c] + 1
+                    queue.append(n)
+        return found
+
+    ports = {"output": [(3, 0)], "machine_post": [(1, 0), (2, 1)]}
+    routes = SimpleNamespace(
+        cells=cells,
+        ports=ports,
+        neighbors=neighbors,
+        distances=distances,
+        to_owner=lambda cell, owner: distances(tuple(ports[owner]))[cell],
+    )
+    idle = {"owner": None, "ready": False, "service": False, "rush": False, "due": 0.0}
+    vehicles = {
+        "resting": {**idle, "cell": (3, 0)},
+        "parked": {**idle, "cell": (2, 0)},
+        "loaded": {
+            **idle,
+            "cell": (3, 1),
+            "owner": "output",
+            "ready": True,
+            "due": -50,
+        },
+    }
+    mover = SharedMover(routes, claim_resting_ports=claim_resting_ports)
+    for tick in range(6):
+        for vehicle, action in mover.moves(vehicles, tick).items():
+            x, y = vehicles[vehicle]["cell"]
+            dx, dy = MOVES.get(action, (0, 0))
+            vehicles[vehicle]["cell"] = (x + dx, y + dy)
+        assert len({v["cell"] for v in vehicles.values()}) == len(vehicles)
+        if vehicles["loaded"]["cell"] == (3, 0):
+            break
+    if not claim_resting_ports:
+        assert vehicles["loaded"]["cell"] == (3, 1)
+        assert vehicles["resting"]["cell"] == (3, 0)
+        return
+    assert vehicles["loaded"]["cell"] == (3, 0)
+    assert vehicles["resting"]["cell"] not in {c for own in ports.values() for c in own}
+
+
+def _open_grid_routes(ports, width=4, height=3):
+    from collections import deque
+    from types import SimpleNamespace
+
+    cells = tuple((x, y) for x in range(width) for y in range(height))
+    neighbors = {
+        c: tuple(
+            n
+            for n in (
+                (c[0] + 1, c[1]),
+                (c[0] - 1, c[1]),
+                (c[0], c[1] + 1),
+                (c[0], c[1] - 1),
+            )
+            if n in cells
+        )
+        for c in cells
+    }
+
+    def distances(goals):
+        found = dict.fromkeys(goals, 0)
+        queue = deque(goals)
+        while queue:
+            c = queue.popleft()
+            for n in neighbors[c]:
+                if n not in found:
+                    found[n] = found[c] + 1
+                    queue.append(n)
+        return found
+
+    return SimpleNamespace(
+        cells=cells,
+        ports=ports,
+        neighbors=neighbors,
+        distances=distances,
+        to_owner=lambda cell, owner: distances(tuple(ports[owner]))[cell],
+    )
+
+
+def _drive(mover, vehicles, ticks):
+    from smartsom.domain.production import MOVES
+
+    for tick in range(ticks):
+        for vehicle, action in mover.moves(vehicles, tick).items():
+            x, y = vehicles[vehicle]["cell"]
+            dx, dy = MOVES.get(action, (0, 0))
+            vehicles[vehicle]["cell"] = (x + dx, y + dy)
+        assert len({v["cell"] for v in vehicles.values()}) == len(vehicles)
+
+
+_IDLE = {"owner": None, "ready": False, "service": False, "rush": False, "due": 0.0}
+
+
+def test_claiming_vehicle_prefers_a_free_port_over_a_nearer_resting_one():
+    routes = _open_grid_routes({"output": [(3, 0), (0, 2)]})
+    vehicles = {
+        "resting": {**_IDLE, "cell": (3, 0)},
+        "loaded": {**_IDLE, "cell": (3, 1), "owner": "output", "ready": True},
+    }
+    _drive(SharedMover(routes, claim_resting_ports=True), vehicles, 1)
+    # The first step heads for the free port instead of entering the held one.
+    # (The resting vehicle then leaves by itself, so later ticks prove nothing.)
+    assert vehicles["loaded"]["cell"] in {(2, 1), (3, 2)}
+
+
+@pytest.mark.parametrize(
+    "state",
+    [{"ready": True, "owner": "other"}, {"service": True, "owner": "output"}],
+)
+def test_ready_or_serving_occupant_is_never_claimed(state):
+    routes = _open_grid_routes({"output": [(3, 0), (0, 2)], "other": [(0, 0)]})
+    vehicles = {
+        "busy": {**_IDLE, "cell": (3, 0), **state},
+        "resting": {**_IDLE, "cell": (0, 2)},
+        "loaded": {**_IDLE, "cell": (3, 1), "owner": "output", "ready": True},
+    }
+    _drive(SharedMover(routes, claim_resting_ports=True), vehicles, 1)
+    # The nearer port is held by a vehicle that is ready for another owner or in
+    # service, so the first step already heads for the port whose occupant is
+    # only resting instead of following the busy vehicle onto its cell.
+    assert vehicles["loaded"]["cell"] in {(2, 1), (3, 2)}
+    if state.get("service"):
+        assert vehicles["busy"]["cell"] == (3, 0)
+
+
+def test_claim_resting_ports_is_set_through_the_algorithm_document():
+    from smartsom.config.base_diagnostic import BaseAlgorithm
+    from smartsom.traffic import build_mover
+    from tests.helpers.algorithm import algorithm_document
+
+    routes = sim_with().protocol.routes
+    document = algorithm_document({"method": "rule"})
+    assert (
+        build_mover(BaseAlgorithm.model_validate(document), routes).claim_resting_ports
+        is False
+    )
+    document["traffic"]["mover"]["params"] = {"claim_resting_ports": True}
+    assert (
+        build_mover(BaseAlgorithm.model_validate(document), routes).claim_resting_ports
+        is True
+    )
+    document["traffic"]["mover"]["params"] = {"claim_resting_ports": "false"}
+    with pytest.raises(ValueError, match="claim_resting_ports"):
+        build_mover(BaseAlgorithm.model_validate(document), routes)
+
+
 def test_final_failure_ends_once_and_idle_jump_cannot_cross_event():
     sim = sim_with(n=1)
     p = sim.protocol

@@ -519,6 +519,35 @@ def test_v2_learning_recipes_share_twelve_case_validation_and_bounded_storage():
     assert count == 45
 
 
+def test_v2_regeneration_preserves_committed_algorithm_bindings(tmp_path, monkeypatch):
+    import shutil
+    from pathlib import Path
+
+    from scripts import build_v2_experiments as generator
+
+    root = Path(__file__).resolve().parents[2]
+    for folder in ("configs", "experiments/implicit-sl"):
+        shutil.copytree(root / folder, tmp_path / folder)
+    monkeypatch.setattr(generator, "ROOT", tmp_path)
+    # This checks recipe bindings, not physical-world generation or hashes.
+    monkeypatch.setattr(generator, "generate_scenario", lambda *args: {})
+    generator.build()
+
+    committed = sorted((root / "experiments/v2").glob("*/*/experiment.yaml"))
+    assert len(committed) == 51
+    for path in committed:
+        generated = tmp_path / path.relative_to(root)
+        expected = yaml.safe_load(path.read_text())["algorithm"]
+        actual = yaml.safe_load(generated.read_text())["algorithm"]
+        assert actual == expected, path.relative_to(root)
+        assert (generated.parent / actual).is_file()
+
+    generated_paths = sorted((tmp_path / "experiments/v2").glob("*/*/experiment.yaml"))
+    before = {path: path.read_bytes() for path in generated_paths}
+    generator.build()
+    assert {path: path.read_bytes() for path in generated_paths} == before
+
+
 def test_bounded_retention_rejects_unretained_evaluation_nodes():
     base = dict(
         schema="smartsom.resolved-experiment/v1",

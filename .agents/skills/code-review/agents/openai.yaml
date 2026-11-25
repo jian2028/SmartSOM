@@ -1,0 +1,6 @@
+interface:
+  display_name: "Code Review"
+  short_description: "按改动风险选择轻量、标准或深入审查，覆盖正确性与必要验证并控制智能体成本"
+  default_prompt: "使用 $code-review 审查本次改动，先按风险选择 L0/L1/L2，再完成对应自查、必要的独立审查和增量验证；不要默认全量多智能体审查。"
+policy:
+  allow_implicit_invocation: true

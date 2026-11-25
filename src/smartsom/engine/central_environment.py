@@ -10,7 +10,7 @@ class CentralEnvironment:
     def __init__(self, scenario, options):
         self.core = ProductionSimulator(scenario, contract="base")
         self.core.protocol.configure(options)
-        self.control = CentralControl(self.core)
+        self.control = CentralControl(self.core, options.central)
         self.mover = build_mover(options, self.core.protocol.routes)
 
     def observation(self):

@@ -398,10 +398,18 @@ class Traffic(Strict):
     )
 
 
+class CentralSettings(Strict):
+    # CONWIP release limit: input releases are withheld while this many jobs
+    # are between system input and output. Without it, centralized release can
+    # fill every station and lock the cross-station buffer cycle.
+    wip_limit: int = Field(gt=0)
+
+
 class BaseAlgorithm(Strict):
     _owner_ids: dict = PrivateAttr(default_factory=dict)
     schema_id: Literal["smartsom.algorithm-components/v2"] = Field(alias="schema")
     control: Literal["base", "centralized"] = "base"
+    central: CentralSettings | None = None
     decision_protocol: DecisionProtocol | None = None
     production: ProductionPolicies
     action_representation: ActionRepresentation
@@ -411,6 +419,14 @@ class BaseAlgorithm(Strict):
             target="smartsom.rewards.default.create_reward"
         )
     )
+
+    @model_serializer(mode="wrap")
+    def omit_unset_central(self, handler):
+        # Unset keeps scientific identities of runs and checkpoints made before.
+        data = handler(self)
+        if self.central is None:
+            data.pop("central", None)
+        return data
 
     @model_validator(mode="after")
     def valid(self):
@@ -422,6 +438,8 @@ class BaseAlgorithm(Strict):
         if set(self.production.bindings) - points:
             raise ValueError("unknown role.stage policy binding")
         protocol = self.decision_protocol or DecisionProtocol()
+        if self.central is not None and self.control != "centralized":
+            raise ValueError("central settings require centralized control")
         if self.control == "centralized":
             if (
                 self.action_representation.model_dump()

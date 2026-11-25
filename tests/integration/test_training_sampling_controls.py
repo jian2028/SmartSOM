@@ -429,6 +429,30 @@ def test_first_recording_is_selected_per_condition_in_parallel(tmp_path, monkeyp
         session.close()
 
 
+def test_evaluation_lease_skips_children_it_cannot_read(monkeypatch):
+    from types import SimpleNamespace
+
+    import psutil
+
+    from smartsom.experiments.phase_resources import EvaluationLease
+
+    def denied():
+        raise psutil.AccessDenied(1)
+
+    def gone():
+        raise psutil.NoSuchProcess(1)
+
+    monkeypatch.setattr(
+        "psutil.Process.children",
+        lambda self, recursive: [
+            SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=7)),
+            SimpleNamespace(memory_info=denied),
+            SimpleNamespace(memory_info=gone),
+        ],
+    )
+    assert EvaluationLease(4, baseline_cpus=3).sampler_memory == 7
+
+
 def test_evaluation_keeps_sampler_memory_before_during_and_after(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

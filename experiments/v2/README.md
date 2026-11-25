@@ -70,8 +70,10 @@ applies to production decisions only; the mover is not randomized.
 - `src/smartsom/representations/v2/`: public derived facts, rules, observation and
   Torch networks. Base and ISL share all physical, action, reward and learning
   contracts; ISL adds candidate-conditioned station/job attention.
-- `configs/algorithms/v2-morris-e1a-current-ppo.yaml`: explicitly an E1a-current
-  adaptation, not a reproduction of remote experiments.
+- `configs/algorithms/v2-morris-e1a-current-ppo-{small,medium}.yaml`: E1a-current
+  adaptations with CONWIP limits 48/96 and work-conserving ADVANCE masking.
+  Large validation retains `v2-morris-e1a-current-ppo.yaml` without these settings.
+  These are adaptations, not reproductions of remote experiments.
 - `configs/algorithms/justin.yaml`: existing Justin rules, unchanged.
 - Every method uses `smartsom.traffic.rule_mover.create_mover`.
 - `scripts/build_v2_scenarios.py` and `scripts/build_v2_experiments.py` deterministically
