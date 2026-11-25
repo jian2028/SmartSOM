@@ -1,4 +1,4 @@
-# 0086 — Configurable native memory policy and selected driver retry
+# 0084 — Configurable native memory policy and selected driver retry
 
 Status: authorized implementation; engineering validation recorded separately.
 

@@ -109,11 +109,12 @@ the earlier one as obsolete.
 | [0074](0074-custom-training-components.md) | Common reward, critic and centralized learning contracts | implementation; verification is reported separately. | — |
 | [0075](0075-inline-study-panels.md) | Algorithm-neutral scenarios and inline study test panels | implemented; verification is recorded separately. | — |
 | [0076](0076-v2-rule-learning.md) | V2 rule learning and matched manufacturing scenarios | implementation in progress; no verification or experiment launch claimed. | — |
-| [0077](0077-native-phase-resource-control.md) | Native phase resource control | implementation under engineering validation; no production migration. | [0078](0078-unified-operational-cli.md) |
+| [0077](0077-native-phase-resource-control.md) | Native phase resource control | implementation under engineering validation; no production migration. | [0078](0078-unified-operational-cli.md), [0084](0084-runtime-memory-policy-and-selected-retry.md) |
 | [0077](0077-v2-diagnostic-window-objective.md) | Explicit V2 diagnostic window objective | superseded for the consolidated diagnostic package by [ADR0081](0081-diagnostic-tail-provenance.md). Original diagnostic decision retained below; default V2 behavior remains unchanged. | [0081](0081-diagnostic-tail-provenance.md) |
-| [0078](0078-unified-operational-cli.md) | Unified operational CLI | implementation under engineering validation. | — |
+| [0078](0078-unified-operational-cli.md) | Unified operational CLI | implementation under engineering validation. | [0084](0084-runtime-memory-policy-and-selected-retry.md) |
 | [0079](0079-native-best-last-validation.md) | Bounded native checkpoints and V2 validation | accepted for implementation; experiment evidence remains separate. | [0080](0080-periodic-evaluation-naming.md) |
 | [0080](0080-periodic-evaluation-naming.md) | Periodic evaluation naming | accepted for implementation by user request. | — |
 | [0081](0081-diagnostic-tail-provenance.md) | Diagnostic tail provenance and explicit task-window comparison | opt-in development diagnostic, not a default learner change. | — |
 | [0082](0082-native-training-sampling-controls.md) | Native sampling and per-network update controls | implementation under review; not a formal experimental result. | [0083](0083-explicit-target-clocks.md) |
 | [0083](0083-explicit-target-clocks.md) | Explicit DQN target clocks and measured replay intensity | implementation under review; not an experimental result. | — |
+| [0084](0084-runtime-memory-policy-and-selected-retry.md) | Configurable native memory policy and selected driver retry | authorized implementation; engineering validation recorded separately. | — |
