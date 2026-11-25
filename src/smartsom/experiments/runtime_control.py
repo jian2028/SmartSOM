@@ -192,6 +192,31 @@ CONFIGURE_FIELDS = {
 }
 
 
+def _hosts_tune(root, state):
+    """Whether this queue, or any child it schedules, is a Ray Tune reservation."""
+    from smartsom.config.codec import safe_yaml_load
+
+    root = Path(root)
+    plan_path = root / "plan.json"
+    plan = json.loads(plan_path.read_text()) if plan_path.is_file() else {}
+    roots = [root]
+    if isinstance(plan.get("files"), list):
+        roots += [root / row["child"] for row in plan["files"] if row.get("child")]
+    roots += [
+        Path(job["root"])
+        for job in state.get("additions", {}).values()
+        if job.get("root")
+    ]
+    for child in roots:
+        inputs = child / "inputs/experiment.yaml"
+        if inputs.is_file():
+            run = (safe_yaml_load(inputs.read_text()) or {}).get("run") or {}
+            # YAML 1.1 reads an unquoted `off` as False.
+            if run.get("tune", "off") not in ("off", False, None):
+                return True
+    return False
+
+
 def memory_policy(state):
     from smartsom.config.launch import MEMORY_POLICY_DEFAULTS
 
@@ -359,6 +384,15 @@ def submit(
             ):
                 raise ValueError(
                     "driver does not support live memory policy; use its matching source"
+                )
+            if any(
+                value.get(name, memory_policy(state)[name]) != default
+                for name, default in MEMORY_POLICY_DEFAULTS.items()
+            ) and _hosts_tune(root, state):
+                # Tune brokers keep their own fixed memory policy. Repricing
+                # only the queue's share would apply the policy partially.
+                raise ValueError(
+                    "configurable memory policy requires native execution (tune: off)"
                 )
             if not state.get("configure_resources"):
                 raise ValueError(

@@ -191,6 +191,18 @@ def update_execution(root, *, profile=None, operations=None, task_ids=None):
             from smartsom.experiments.author_batch import load
 
             _, plan, _ = load(directory)
+            from smartsom.config.launch import MEMORY_POLICY_DEFAULTS
+
+            # Fail before any write: runtime submit rejects the same policy.
+            if any(
+                settings["resources"][key] != default
+                for key, default in MEMORY_POLICY_DEFAULTS.items()
+            ) and runtime_control._hosts_tune(
+                directory, runtime_control.snapshot(directory)
+            ):
+                raise ValueError(
+                    "configurable memory policy requires native execution (tune: off)"
+                )
         else:
             from smartsom.experiments.reservation import load
 

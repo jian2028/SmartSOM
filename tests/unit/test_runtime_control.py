@@ -1029,3 +1029,51 @@ def test_training_reservation_reprices_before_first_evaluation(tmp_path, monkeyp
     slot = queue_admission.snapshot(tmp_path)["slots"]["native:train"]
     assert slot["memory_base"] == 4 * gib
     assert slot["memory"] == pytest.approx(4.4 * gib)
+
+
+@pytest.mark.parametrize("child", ["planned", "added"])
+def test_live_memory_policy_rejects_queue_hosting_tune(tmp_path, child):
+    import json
+
+    queue = tmp_path / "queue"
+    runtime.initialize(queue, 2)
+    tune_root = tmp_path / "tune-child"
+    (tune_root / "inputs").mkdir(parents=True)
+    (tune_root / "inputs/experiment.yaml").write_text("run:\n  tune: asha\n")
+    with runtime.transaction(queue) as state:
+        state["memory_policy_controls"] = True
+        state["configure_resources"] = True
+        if child == "added":
+            state["additions"]["t"] = {"root": str(tune_root), "status": "queued"}
+    if child == "planned":
+        (queue / "plan.json").write_text(
+            json.dumps({"files": [{"id": "t", "child": "../tune-child"}]})
+        )
+    before = runtime.snapshot(queue)
+    with pytest.raises(ValueError, match="requires native execution"):
+        runtime.submit(queue, "configure", value={"host_memory_reserve_ratio": 0.05})
+    assert runtime.snapshot(queue) == before
+    # Restating the defaults applies no partial policy and stays allowed.
+    receipt = runtime.submit(
+        queue,
+        "configure",
+        value={"memory_headroom_ratio": 0.25, "host_memory_reserve_ratio": 0.2},
+    )
+    assert receipt["status"] == "received"
+
+
+@pytest.mark.parametrize("spelling", ["'off'", "off", None])
+def test_live_memory_policy_allows_native_children(tmp_path, spelling):
+    queue = tmp_path / "queue"
+    runtime.initialize(queue, 2)
+    native = tmp_path / "native-child"
+    (native / "inputs").mkdir(parents=True)
+    (native / "inputs/experiment.yaml").write_text(
+        "run: {}\n" if spelling is None else f"run:\n  tune: {spelling}\n"
+    )
+    with runtime.transaction(queue) as state:
+        state["memory_policy_controls"] = True
+        state["configure_resources"] = True
+        state["additions"]["n"] = {"root": str(native), "status": "queued"}
+    receipt = runtime.submit(queue, "configure", value={"memory_headroom_ratio": 0.1})
+    assert receipt["status"] == "received"
