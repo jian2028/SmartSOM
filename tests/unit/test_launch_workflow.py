@@ -800,3 +800,36 @@ def test_tune_resume_rejects_unsupported_policy_before_writing(tmp_path):
             root, operations={"resources": {"memory_headroom_ratio": 0.15}}
         )
     assert (root / "execution.json").read_bytes() == before
+
+
+def test_stopped_driver_override_preserves_unchanged_live_limits(tmp_path):
+    from smartsom.experiments import author_batch
+    from smartsom.experiments import runtime_control as runtime
+    from smartsom.experiments.launch import compile_launch, update_execution
+    from tests.unit.test_incremental_batch import batch
+
+    compiled = compile_launch(
+        batch(tmp_path),
+        ids=["medium-base", "small-base"],
+        first_train_seeds=1,
+        operations={
+            "output_root": str(tmp_path / "run"),
+            "tracking": {"mode": "disabled"},
+        },
+    )
+    root = author_batch.allocate(compiled)
+    _, plan, state = author_batch.load(root)
+    author_batch._runtime_initialize(root, plan, state)
+    runtime.submit(root, "configure", value={"max_concurrent": 7, "cpus": 3})
+    runtime.apply(root)
+    with runtime.transaction(root) as live:
+        live["status"] = "failed"
+
+    update_execution(root, operations={"resources": {"memory_headroom_ratio": 0.15}})
+    state = runtime.apply(root)
+    assert state["limit"] == 7
+    assert state["budget"]["cpus"] == 3
+    assert state["memory_policy"]["memory_headroom_ratio"] == 0.15
+
+    update_execution(root, operations={"concurrency": {"max_concurrent": 3}})
+    assert runtime.apply(root)["limit"] == 3

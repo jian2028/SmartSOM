@@ -265,8 +265,21 @@ def update_execution(root, *, profile=None, operations=None, task_ids=None):
                         "reset": True,
                     },
                 )
-            submit(directory, "limit", value=settings["concurrency"]["max_concurrent"])
-            submit(directory, "mode", value=settings["concurrency"]["mode"])
+
+            def changed(section, key):
+                # Stage only what this call changes or names. Restart preserves
+                # live limits/mode/budget, so resubmitting unchanged
+                # execution.json values would undo earlier live configure.
+                return settings[section].get(key) != previous.get("settings", {}).get(
+                    section, {}
+                ).get(key) or key in (operations or {}).get(section, {})
+
+            if changed("concurrency", "max_concurrent"):
+                submit(
+                    directory, "limit", value=settings["concurrency"]["max_concurrent"]
+                )
+            if changed("concurrency", "mode"):
+                submit(directory, "mode", value=settings["concurrency"]["mode"])
             budget = {
                 k: v
                 for k, v in {
@@ -277,7 +290,9 @@ def update_execution(root, *, profile=None, operations=None, task_ids=None):
                 }.items()
                 if v is not None
             }
-            if budget:
+            if budget and (
+                changed("resources", "cpus") or changed("resources", "memory_gib")
+            ):
                 submit(directory, "budget", value=budget)
             from smartsom.config.launch import MEMORY_POLICY_DEFAULTS
 
