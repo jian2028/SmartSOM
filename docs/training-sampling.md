@@ -95,20 +95,26 @@ target_kl: 0.02          # positive
 ```
 
 `lr_final_fraction` and `lr_decay_updates` must be given together. The Adam
-learning rate then decays linearly from `learning_rate` to
-`learning_rate * lr_final_fraction` over `lr_decay_updates` PPO update calls and
-stays there. The clock counts update calls that trained at least one group (not
-minibatch steps) and is stored in the learner checkpoint, so a resumed run
-continues the schedule; checkpoints written before this option resume at zero.
-With `target_kl`, after each epoch of an update the learner averages the
-approximate KL over that epoch's actor-masked decisions, each measured in its
-minibatch before that minibatch's optimizer step; if the mean exceeds
-`1.5 * target_kl`, the remaining epochs of that update are skipped for that
-network. The 1.5 factor is a convention common in public PPO implementations,
-not a tuned value. Update losses report `learning_rate` per group when decay is
-set and `epochs_run` per network when `target_kl` is set. Both settings are
-rejected for Double DQN. They have so far been exercised only by development
-screening runs.
+learning rate then decays linearly from `learning_rate` to `learning_rate *
+lr_final_fraction` over `lr_decay_updates` PPO update calls and stays there. The
+clock counts update calls in which at least one network took an optimizer step
+(not the minibatch steps themselves) and is stored in the learner checkpoint, so
+a resumed run continues the schedule; checkpoints written before this option
+resume at zero. With `target_kl`, after each epoch of an update the learner
+averages the approximate KL over that epoch's actor-masked decisions, each
+measured in its minibatch before that minibatch's optimizer step; if the mean
+exceeds `1.5 * target_kl`, the remaining epochs of that update are skipped for
+that network. The check is made once per epoch, on the epoch mean over
+non-forced decisions; if every decision in the batch is forced, no KL is
+measured and the stop never triggers. Actor and critic share one loss and one
+optimizer step, so a triggered stop ends both for that network. A stop also
+skips the remaining epochs' minibatch shuffles, so the minibatch order of later
+networks in the same update depends on earlier stops (deterministic for a given
+seed). The 1.5 factor is a convention common in public PPO implementations, not
+a tuned value. Update losses report `learning_rate` per group when decay is set
+and `epochs_run` per network when `target_kl` is set. Both settings are rejected
+for Double DQN, including per-role overrides. They have so far been exercised
+only by development screening runs.
 
 ## Compatibility and evidence
 

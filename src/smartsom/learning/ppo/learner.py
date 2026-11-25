@@ -47,7 +47,7 @@ class BasePPO:
         self.generator = torch.Generator().manual_seed(seed)
         self.records = []
         self.updates = 0
-        # update() calls that trained a group: the clock of the optional learning-rate decay.
+        # update() calls with an optimiser step: the clock of the optional learning-rate decay.
         self.update_calls = 0
         self.last_losses = {}
         self.bound_policy_states = {}
@@ -120,6 +120,7 @@ class BasePPO:
         from smartsom.learning.diagnostics import UpdateDiagnostics
 
         losses = {}
+        stepped = False
         diagnostics = UpdateDiagnostics()
         for group in self.groups:
             rows = [r for r in self.records if r["request"].group == group]
@@ -227,6 +228,7 @@ class BasePPO:
                         nn.utils.clip_grad_norm_(self.models[key].parameters(), 1.0)
                         optimizer.step()
                         self.updates += 1
+                        stepped = True
                         losses[group] = {
                             "actor": float(actor.detach()),
                             "critic": float(critic_loss.detach()),
@@ -245,7 +247,7 @@ class BasePPO:
                 losses[group]["epochs_run"] = epochs_run
             if settings.lr_final_fraction is not None:
                 losses[group]["learning_rate"] = self.scheduled_lr(settings)
-        if losses:
+        if stepped:
             self.update_calls += 1
         self.records = []
         self.last_losses = losses

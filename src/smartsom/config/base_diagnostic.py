@@ -385,7 +385,15 @@ class PolicyDefinition(Strict):
                     raise ValueError(
                         "initialization is global and cannot be overridden per role"
                     )
-                LearnerParameters.model_validate({**self.learner.params, **overrides})
+                merged = LearnerParameters.model_validate(
+                    {**self.learner.params, **overrides}
+                )
+                if dqn and (
+                    merged.lr_final_fraction is not None or merged.target_kl is not None
+                ):
+                    raise ValueError(
+                        "learning-rate decay and target_kl are PPO settings"
+                    )
         return self
 
 

@@ -50,7 +50,31 @@ def trained(options, updates=2):
 
 
 def options(**params):
-    return algorithm_options(epochs=3, batch_size=16, **params)
+    return algorithm_options(**{"epochs": 3, "batch_size": 16, **params})
+
+
+def record_step_rates(policy):
+    """Record the learning rate in effect at every optimiser step."""
+    rates = []
+    for optimizer in policy.optimizers.values():
+        step = optimizer.step
+
+        def recorded(*args, _optimizer=optimizer, _step=step, **kwargs):
+            rates.append(_optimizer.param_groups[0]["lr"])
+            return _step(*args, **kwargs)
+
+        optimizer.step = recorded
+    return rates
+
+
+def run_updates(policy, config, seeds):
+    for seed in seeds:
+        report, rewards, critic = episode(
+            base_factory("small"), WORKLOAD, config, policy, seed, "normal", 1000
+        )
+        policy.update(
+            rewards, terminal=report["status"] == "completed", final_critic=critic
+        )
 
 
 def assert_same_parameters(left, right):
@@ -148,3 +172,63 @@ def test_invalid_parameters_are_rejected(params):
 def test_options_are_ppo_only(params):
     with pytest.raises(ValueError, match="PPO settings"):
         algorithm_options(method="dqn", **params)
+
+
+def test_rate_in_effect_at_every_optimizer_step():
+    from smartsom.learning.ppo.learner import BasePPO
+
+    config = options(learning_rate=0.001, lr_final_fraction=0.1, lr_decay_updates=2)
+    policy = BasePPO(config, 1)
+    rates = record_step_rates(policy)
+    for n, expected in enumerate((0.001, 0.00055, 0.0001, 0.0001)):
+        rates.clear()
+        run_updates(policy, config, [123 + n])
+        assert rates, n
+        assert rates == pytest.approx([expected] * len(rates)), n
+
+
+def test_mid_decay_resume_applies_the_uninterrupted_rate(tmp_path):
+    from smartsom.learning.ppo.learner import BasePPO
+
+    config = options(learning_rate=0.001, lr_final_fraction=0.1, lr_decay_updates=4)
+    straight = BasePPO(config, 1)
+    run_updates(straight, config, [123, 124])
+    straight.save(tmp_path / "mid.pt")
+    expected = record_step_rates(straight)
+    run_updates(straight, config, [125])
+    resumed = BasePPO(config, 7)
+    resumed.load(tmp_path / "mid.pt")
+    actual = record_step_rates(resumed)
+    run_updates(resumed, config, [125])
+    assert actual and expected
+    rate = 0.001 * (1 - 0.5 * 0.9)
+    assert actual == pytest.approx([rate] * len(actual))
+    assert expected == pytest.approx([rate] * len(expected))
+
+
+def test_kl_stop_after_first_epoch_with_several_minibatches():
+    _, losses = trained(options(batch_size=4, target_kl=1e-12))
+    runs = [
+        n for loss in losses for g in loss.values() for n in g["epochs_run"].values()
+    ]
+    # Later minibatches of epoch 1 follow optimiser steps, so their KL is positive.
+    assert 1 in runs
+
+
+def test_clock_does_not_advance_without_an_optimizer_step():
+    from smartsom.learning.ppo.learner import BasePPO
+
+    config = options(lr_final_fraction=0.5, lr_decay_updates=4)
+    policy = BasePPO(config, 1)
+    policy.ownership.is_frozen = lambda key: True
+    run_updates(policy, config, [123])
+    assert policy.updates == 0 and policy.update_calls == 0
+
+
+def test_per_role_override_cannot_enable_ppo_options_on_dqn():
+    data = algorithm_options(method="dqn").model_dump(mode="json", by_alias=True)
+    data["production"]["policies"]["dqn"]["role_params"] = {
+        "machine": {"target_kl": 0.02}
+    }
+    with pytest.raises(ValueError, match="PPO settings"):
+        BaseAlgorithm.model_validate(data)
