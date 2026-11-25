@@ -308,3 +308,15 @@ def test_uncertain_retry_keeps_external_owner_claim(tmp_path, monkeypatch):
     jobs[key]["retry_recovery_required"] = None
     batch_append.synchronize(root, jobs)
     assert "queue" not in queue_admission.snapshot(owner)
+
+
+@pytest.mark.usefixtures("lightweight")
+def test_append_is_rejected_while_selected_retry_recovery_runs(tmp_path):
+    folder = batch(tmp_path)
+    root = open_queue(folder)
+    with runtime_control.transaction(root) as state:
+        state["recovery_tasks"] = ["medium-base--seed-4101"]
+    before = runtime_control.snapshot(root)
+    with pytest.raises(ValueError, match="selected retry recovery is running"):
+        runtime_control.append(root, folder / "small-base.yaml", first_train_seeds=1)
+    assert runtime_control.snapshot(root) == before

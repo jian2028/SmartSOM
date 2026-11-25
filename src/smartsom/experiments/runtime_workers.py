@@ -408,6 +408,11 @@ class NativeScheduler:
         if not state:
             raise ValueError("native scheduling requires initialized runtime control")
         for key, job in state["additions"].items():
+            if (
+                state.get("recovery_tasks") is not None
+                and key not in state["recovery_tasks"]
+            ):
+                continue
             self.jobs.setdefault(key, dict(job))
         if not getattr(self, "_retry_reconciled", False):
             self._restore_queued_retries(state)
@@ -415,6 +420,8 @@ class NativeScheduler:
         if runtime._RETRY_ENABLED:
             self._consume_retries(state)
             state = runtime.snapshot(self.root)
+        policy = runtime.memory_policy(state)
+        memory_factor = 1 + policy["memory_headroom_ratio"]
         shared_slots = queue_admission.snapshot(self.root).get("slots", {})
         for key, job in self.jobs.items():
             self._requirements(job)
@@ -497,9 +504,10 @@ class NativeScheduler:
                             owner_id=owner_id,
                             cpus=None if job.get("phase_resources") else job["cpus"],
                             resource_estimate=job.get("resource_estimate"),
-                            memory=math.ceil((measured_memory or rss) * 1.25)
+                            memory=math.ceil((measured_memory or rss) * memory_factor)
                             if job.get("phase_resources")
-                            else math.ceil(self._memory(key) * 1.25),
+                            else math.ceil(self._memory(key) * memory_factor),
+                            memory_headroom_ratio=policy["memory_headroom_ratio"],
                             observed_memory=measured_memory,
                             observed_cpus=measured_cpu,
                             observed_processes=self.resource_sampler.identities.get(
@@ -624,7 +632,10 @@ class NativeScheduler:
                     job["status"] = "queued"
         observed = self.observer.snapshot()
         self.samples += 1
-        memory_reserve = max(2 * 1024**3, int(observed.memory_total * 0.2))
+        memory_reserve = max(
+            2 * 1024**3,
+            int(observed.memory_total * policy["host_memory_reserve_ratio"]),
+        )
         cpu_free = observed.cpus * (1 - observed.cpu_load / 100)
         budget = state.get("budget", {})
         cpu_used = sum(self.jobs[key].get("cpus", 1) for key in self.processes)
@@ -650,7 +661,7 @@ class NativeScheduler:
                 (self.jobs[key].get("cpus", 1) for key in eligible), default=1
             )
             typical_memory = min(
-                (math.ceil(self._memory(key) * 1.25) for key in eligible),
+                (math.ceil(self._memory(key) * memory_factor) for key in eligible),
                 default=320 * 1024**2,
             )
             effective_limit = min(
@@ -688,7 +699,7 @@ class NativeScheduler:
         else:
             for key in pending:
                 own_slots = self.jobs[key].get("own_slots", False)
-                memory_charge = math.ceil(self._memory(key) * 1.25)
+                memory_charge = math.ceil(self._memory(key) * memory_factor)
                 if owner_id and not own_slots:
                     queue_admission.note_wait(
                         self.root,
@@ -727,7 +738,7 @@ class NativeScheduler:
                     or cpu_free < self.jobs[key].get("cpus", 1) + 0.25
                     or cpu_used + self.jobs[key].get("cpus", 1)
                     > budget.get("cpus", float("inf"))
-                    or memory_used + self._memory(key) * 1.25
+                    or memory_used + self._memory(key) * memory_factor
                     > budget.get("memory", float("inf"))
                     or observed.memory_available < memory_reserve + self._memory(key)
                 ):
@@ -744,9 +755,11 @@ class NativeScheduler:
                         status="running",
                         cpus=self.jobs[key].get("cpus", 1),
                         memory=memory_charge,
+                        phase_resources=self.jobs[key].get("phase_resources", False),
                         host=observed,
                         resource_model=(
                             dict(
+                                peak_factor=memory_factor,
                                 descriptor=self.jobs[key]["resource_descriptor"],
                                 cpus=self.jobs[key]["authored_cpus"],
                                 memory=max(256 * 1024**2, self.peak_memory.get(key, 0)),

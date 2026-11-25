@@ -162,6 +162,12 @@ def append(
             return copy.deepcopy(prior)
         if not state or not state["accepting"] or state["status"] in runtime.TERMINAL:
             raise ValueError("batch is closed; use run --resume-missing to reopen it")
+        if state.get("recovery_tasks") is not None:
+            # A selected-retry driver only schedules its recovery scope, so an
+            # accepted append would stay queued after the driver ends.
+            raise ValueError(
+                "selected retry recovery is running; append after the driver ends"
+            )
         if expected_revision is not None and expected_revision != state["revision"]:
             raise ValueError("runtime revision changed; refresh before retrying")
         try:

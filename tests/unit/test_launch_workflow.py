@@ -748,3 +748,88 @@ def test_failed_single_requires_explicit_retry_before_any_mutation(
     assert len(calls) == 1
     if mode != "foreground":
         assert calls[0]["retry_failed"] is True
+
+
+def test_memory_policy_names_and_yaml_cli_precedence():
+    from smartsom.config.launch import resolve_operations, scientific_identity
+    from smartsom.experiments.cli import _operation_overrides, _parser
+
+    authored = {
+        "resources": {"memory_headroom_ratio": 0.3, "host_memory_reserve_ratio": 0.25}
+    }
+    for command in ("check", "run", "resume", "retry", "configure"):
+        args = _parser().parse_args(
+            [
+                command,
+                "unused",
+                "--memory-headroom-ratio",
+                ".15",
+                "--host-memory-reserve-ratio",
+                ".1",
+            ]
+        )
+        settings, _ = resolve_operations(authored, cli=_operation_overrides(args))
+        assert settings["resources"]["memory_headroom_ratio"] == 0.15
+        assert settings["resources"]["host_memory_reserve_ratio"] == 0.1
+    assert scientific_identity({"experiment": authored}) == scientific_identity(
+        {"experiment": {"resources": settings["resources"]}}
+    )
+    args = _parser().parse_args(
+        ["retry", "unused", "--task-id", "base-shared", "--task-id", "sl-shared"]
+    )
+    assert args.task_id == ["base-shared", "sl-shared"]
+
+
+def test_tune_rejects_unsupported_memory_policy():
+    with pytest.raises(ValueError, match="requires native execution"):
+        compile_reservation(
+            SOURCE,
+            tuning="auto",
+            operations={"resources": {"memory_headroom_ratio": 0.15}},
+        )
+
+
+def test_tune_resume_rejects_unsupported_policy_before_writing(tmp_path):
+    from tests.unit.test_incremental_batch import batch
+
+    plan = compile_reservation(batch(tmp_path) / "medium-base.yaml", tuning="auto")
+    root = allocate(plan, root=tmp_path / "tune")
+    before = (root / "execution.json").read_bytes()
+    with pytest.raises(ValueError, match="requires native execution"):
+        update_execution(
+            root, operations={"resources": {"memory_headroom_ratio": 0.15}}
+        )
+    assert (root / "execution.json").read_bytes() == before
+
+
+def test_stopped_driver_override_preserves_unchanged_live_limits(tmp_path):
+    from smartsom.experiments import author_batch
+    from smartsom.experiments import runtime_control as runtime
+    from smartsom.experiments.launch import compile_launch, update_execution
+    from tests.unit.test_incremental_batch import batch
+
+    compiled = compile_launch(
+        batch(tmp_path),
+        ids=["medium-base", "small-base"],
+        first_train_seeds=1,
+        operations={
+            "output_root": str(tmp_path / "run"),
+            "tracking": {"mode": "disabled"},
+        },
+    )
+    root = author_batch.allocate(compiled)
+    _, plan, state = author_batch.load(root)
+    author_batch._runtime_initialize(root, plan, state)
+    runtime.submit(root, "configure", value={"max_concurrent": 7, "cpus": 3})
+    runtime.apply(root)
+    with runtime.transaction(root) as live:
+        live["status"] = "failed"
+
+    update_execution(root, operations={"resources": {"memory_headroom_ratio": 0.15}})
+    state = runtime.apply(root)
+    assert state["limit"] == 7
+    assert state["budget"]["cpus"] == 3
+    assert state["memory_policy"]["memory_headroom_ratio"] == 0.15
+
+    update_execution(root, operations={"concurrency": {"max_concurrent": 3}})
+    assert runtime.apply(root)["limit"] == 3

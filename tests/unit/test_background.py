@@ -183,8 +183,8 @@ def test_directory_resume_forwards_failed_trial_retry(root, monkeypatch):
     monkeypatch.setattr(
         author_batch,
         "execute_saved",
-        lambda path, *, retry_failed: (
-            calls.append((path, retry_failed)) or {"status": "completed"}
+        lambda path, *, retry_failed, retry_tasks: (
+            calls.append((path, retry_failed, retry_tasks)) or {"status": "completed"}
         ),
     )
     args = SimpleNamespace(
@@ -197,7 +197,7 @@ def test_directory_resume_forwards_failed_trial_retry(root, monkeypatch):
     assert (
         api.resume(args.source, retry_failed=args.retry_failed)["status"] == "completed"
     )
-    assert calls == [(root, True)]
+    assert calls == [(root, True, None)]
 
 
 def test_refuse_existing_owner_and_members_without_starting(root, monkeypatch):
@@ -307,7 +307,10 @@ def test_windows_and_invalid_inputs_before_spawn(root, monkeypatch):
         background.launch(root)
 
 
-def test_child_binds_before_ready_and_driver_then_finishes_scope(root, monkeypatch):
+@pytest.mark.parametrize("retry_tasks", [None, ["base-shared", "sl-shared"]])
+def test_child_binds_before_ready_and_driver_then_finishes_scope(
+    root, monkeypatch, retry_tasks
+):
     control.write_json(
         root / "control/background-request.json",
         {
@@ -317,6 +320,7 @@ def test_child_binds_before_ready_and_driver_then_finishes_scope(root, monkeypat
             "resume": True,
             "display_options": {"progress": "on"},
             "max_concurrent": 2,
+            "retry_tasks": retry_tasks,
         },
     )
     events = []
@@ -338,6 +342,7 @@ def test_child_binds_before_ready_and_driver_then_finishes_scope(root, monkeypat
         )
         assert kwargs == {
             "max_concurrent": 2,
+            "retry_tasks": retry_tasks,
             "display_options": {"progress": "off"},
             "recommend_only": False,
             "retry_failed": False,
@@ -519,3 +524,42 @@ def test_foreground_tracking_prompt_requires_explicit_answer(
             (directory / "session.json").unlink(missing_ok=True)
     assert not list(directory.glob("*.request.json"))
     assert foreground.offline_choice(ValueError("detached")) is False
+
+
+@pytest.mark.parametrize(
+    "selected_status,expected", [("completed", "completed"), ("failed", "failed")]
+)
+def test_foreground_reports_selected_retry_result_separately(
+    tmp_path, monkeypatch, selected_status, expected
+):
+    from smartsom.experiments import background, foreground
+    from smartsom.experiments.evidence import write_json
+
+    root = tmp_path / "run"
+    root.mkdir()
+    write_json(
+        root / "batch.json",
+        {
+            "files": {
+                "selected": {"status": selected_status},
+                "peer": {"status": "failed"},
+            }
+        },
+    )
+    monkeypatch.setattr(background, "_check_owner", lambda root: None)
+    monkeypatch.setattr(
+        background, "launch", lambda *args, **kwargs: {"status": "running"}
+    )
+    monkeypatch.setattr("smartsom.telemetry.monitor.monitor", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(foreground.control, "read", lambda root: {"status": "failed"})
+    monkeypatch.setattr(
+        foreground.control,
+        "processes",
+        lambda: {foreground.os.getpid(): {"pid": foreground.os.getpid()}},
+    )
+    result = foreground.run(
+        root, resume=True, retry_failed=True, retry_tasks=["selected"]
+    )
+    assert result["status"] == "failed"
+    assert result["retry_status"] == expected
+    assert result["retry_tasks"] == ["selected"]

@@ -31,6 +31,7 @@ def resume(
     *,
     background=None,
     retry_failed=False,
+    retry_tasks=None,
     roots=None,
     profile=None,
     operations=None,
@@ -52,6 +53,10 @@ def resume(
         and owner.get("status") in control.ACTIVE
         and control.alive(owner["owner"], control.processes())
     ):
+        if retry_tasks is not None:
+            raise ConfigurationError(
+                "selected driver recovery requires an ended batch; use live retry"
+            )
         if profile or operations or background is not None:
             raise ConfigurationError(
                 "live resume only releases pause; change live resources through configure"
@@ -64,6 +69,12 @@ def resume(
     schema = (
         json.loads(plan_path.read_text()).get("schema") if plan_path.exists() else None
     )
+    if retry_tasks is not None:
+        if not retry_failed or schema != "smartsom.author-batch-plan/v1":
+            raise ConfigurationError("selected retry requires a native batch retry")
+        from smartsom.experiments.batch_retry import inspect_ended_targets
+
+        inspect_ended_targets(root, retry_tasks)
     if schema == "smartsom.reservation-plan/v1" and not retry_failed:
         from smartsom.experiments.catalog import read_json
 
@@ -76,7 +87,9 @@ def resume(
         changes = dict(operations or {})
         if background is not None:
             changes["launch"] = {"mode": "background" if background else "foreground"}
-        update_execution(root, profile=profile, operations=changes)
+        update_execution(
+            root, profile=profile, operations=changes, task_ids=retry_tasks
+        )
     saved = (
         json.loads((root / "execution.json").read_text())
         if (root / "execution.json").exists()
@@ -103,6 +116,7 @@ def resume(
             root,
             resume=True,
             retry_failed=retry_failed,
+            retry_tasks=retry_tasks,
             display_options=OVERRIDES.get(),
         )
     if schema == "smartsom.reservation-plan/v1":
@@ -116,8 +130,10 @@ def resume(
         if background:
             from smartsom.experiments.background import launch
 
-            return launch(root, resume=True, retry_failed=retry_failed)
-        return execute_saved(root, retry_failed=retry_failed)
+            return launch(
+                root, resume=True, retry_failed=retry_failed, retry_tasks=retry_tasks
+            )
+        return execute_saved(root, retry_failed=retry_failed, retry_tasks=retry_tasks)
     raise ConfigurationError(
         "historical experiment recovery requires its archived source and environment; "
         "see docs/archive/index.json"

@@ -71,7 +71,7 @@ def _retry_settled(child, job):
         raise ValueError("failed task or owned subprocess is still running")
 
 
-def inspect_target(queue, task_id, state, *, allow_paused=False):
+def inspect_target(queue, task_id, state, *, allow_paused=False, allow_ended=False):
     """Check a failed or explicitly selected paused task and its continuation.
 
     Caller must revalidate under the coordinator's own scheduling protocol.
@@ -83,7 +83,7 @@ def inspect_target(queue, task_id, state, *, allow_paused=False):
     from smartsom.experiments.reservation import load as load_reservation
 
     root = Path(queue).resolve()
-    if state.get("status") in runtime_control.TERMINAL:
+    if state.get("status") in runtime_control.TERMINAL and not allow_ended:
         raise ValueError(
             "batch has ended; recover the batch through its official driver"
         )
@@ -167,6 +167,47 @@ def inspect_target(queue, task_id, state, *, allow_paused=False):
         "episodes": len(saved["rows"]),
         "ticks": saved["ticks"],
     }
+
+
+def inspect_ended_targets(queue, task_ids):
+    """Validate the exact stopped-driver subset before changing execution state."""
+    if (
+        not isinstance(task_ids, (list, tuple))
+        or not task_ids
+        or any(not isinstance(key, str) or not key for key in task_ids)
+        or len(set(task_ids)) != len(task_ids)
+    ):
+        raise ValueError("retry requires distinct nonempty exact task IDs")
+    root = Path(queue).resolve()
+    state = runtime_control.snapshot(root)
+    from smartsom.experiments.author_batch import load
+
+    _, plan, batch = load(root)
+    if pending_retry_targets(state) - set(task_ids) or any(
+        job.get("retry_pending") and key not in task_ids
+        for key, job in {**state.get("tasks", {}), **state.get("additions", {})}.items()
+    ):
+        raise ValueError(
+            "pending retry outside selected recovery; settle existing retry intents first"
+        )
+    rows = {row["id"]: row for row in plan["files"]}
+    selected = set((batch.get("selection") or {}).get("tasks", rows))
+    result = []
+    for key in task_ids:
+        if key not in rows or key not in selected:
+            raise ValueError(
+                f"{key}: retry target is outside the frozen batch selection"
+            )
+        if batch["files"][key]["status"] != "failed":
+            raise ValueError(f"{key}: retry requires a failed task")
+        row = rows[key]
+        if any(
+            batch["files"][peer]["status"] != "completed"
+            for peer in row.get("requires", [])
+        ):
+            raise ValueError(f"{key}: retry dependencies have not completed")
+        result.append(inspect_target(root, key, state, allow_ended=True))
+    return result
 
 
 def check_driver_recovery(observed, *, enabled):

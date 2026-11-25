@@ -19,9 +19,21 @@ class ResourceGuard(StrictModel):
     min_disk_free_gib: float = Field(gt=0, allow_inf_nan=False)
 
 
+MEMORY_POLICY_DEFAULTS = {
+    "memory_headroom_ratio": 0.25,
+    "host_memory_reserve_ratio": 0.20,
+}
+
+
 class Resources(StrictModel):
     cpus: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     memory_gib: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    memory_headroom_ratio: float = Field(
+        default=0.25, ge=0, le=1, strict=True, allow_inf_nan=False
+    )
+    host_memory_reserve_ratio: float = Field(
+        default=0.20, ge=0, lt=1, strict=True, allow_inf_nan=False
+    )
     guard: ResourceGuard | None = None
 
 
