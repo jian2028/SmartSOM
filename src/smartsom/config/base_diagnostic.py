@@ -212,6 +212,20 @@ class LearnerParameters(Strict):
     return_estimator: Literal["episode_return", "gae"] = "episode_return"
     gamma: float = Field(default=1.0, gt=0, le=1)
     gae_lambda: float = Field(default=0.95, ge=0, le=1)
+    # PPO options, off by default: linear learning-rate decay to
+    # learning_rate * lr_final_fraction over lr_decay_updates update calls, and
+    # skipping the remaining epochs once an epoch's mean approx KL > 1.5 * target_kl.
+    lr_final_fraction: float | None = Field(default=None, gt=0, le=1)
+    lr_decay_updates: int | None = Field(default=None, gt=0)
+    target_kl: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def lr_decay_pair(self):
+        if (self.lr_final_fraction is None) != (self.lr_decay_updates is None):
+            raise ValueError(
+                "lr_final_fraction and lr_decay_updates must be given together"
+            )
+        return self
 
 
 Role = Literal["machine", "dispatcher", "pre", "post", "input"]
@@ -350,6 +364,10 @@ class PolicyDefinition(Strict):
             dqn = self.learner.target == "smartsom.learning.dqn.create_learner"
             if settings.update_trigger == ("fragment" if dqn else "transitions"):
                 raise ValueError("update_trigger does not apply to this learner")
+            if dqn and (
+                settings.lr_final_fraction is not None or settings.target_kl is not None
+            ):
+                raise ValueError("learning-rate decay and target_kl are PPO settings")
             if not dqn and (
                 settings.update_amount != "fixed"
                 or settings.warmup_transitions

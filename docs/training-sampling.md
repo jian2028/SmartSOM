@@ -86,6 +86,30 @@ DQN replay ratios or exploration schedules. Existing `episode_return` remains
 selectable; fragment collection necessarily makes its nonterminal targets
 bootstrapped finite-horizon returns.
 
+Two optional PPO stability settings are off when absent:
+
+```yaml
+lr_final_fraction: 0.1   # with lr_decay_updates; in (0, 1]
+lr_decay_updates: 200    # positive integer
+target_kl: 0.02          # positive
+```
+
+`lr_final_fraction` and `lr_decay_updates` must be given together. The Adam
+learning rate then decays linearly from `learning_rate` to
+`learning_rate * lr_final_fraction` over `lr_decay_updates` PPO update calls and
+stays there. The clock counts update calls that trained at least one group (not
+minibatch steps) and is stored in the learner checkpoint, so a resumed run
+continues the schedule; checkpoints written before this option resume at zero.
+With `target_kl`, after each epoch of an update the learner averages the
+approximate KL over that epoch's actor-masked decisions, each measured in its
+minibatch before that minibatch's optimizer step; if the mean exceeds
+`1.5 * target_kl`, the remaining epochs of that update are skipped for that
+network. The 1.5 factor is a convention common in public PPO implementations,
+not a tuned value. Update losses report `learning_rate` per group when decay is
+set and `epochs_run` per network when `target_kl` is set. Both settings are
+rejected for Double DQN. They have so far been exercised only by development
+screening runs.
+
 ## Compatibility and evidence
 
 Maintained YAML files explicitly select their previous serial/episode behavior.

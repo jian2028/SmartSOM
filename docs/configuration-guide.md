@@ -57,6 +57,9 @@ CLI 改预算时还需同步完整的 `evaluation.checkpoints`，或直接编辑
 - PPO 的 `epochs` 是遍历当前 rollout 的轮数；Double DQN 是每次更新、每个有样本
   的学习网络从 replay 抽取多少批样本。`batch_size` 都是梯度更新的决策样本数，
   不是 episode 数。
+- PPO 可选 `lr_final_fraction` 与 `lr_decay_updates`（须同时给出，学习率线性衰减）
+  和 `target_kl`（某轮平均近似 KL 超过 1.5 倍时跳过本次更新的剩余轮数）；缺省时关闭，
+  对 Double DQN 会报错。语义见 [training-sampling](training-sampling.md)。
 - `clip`、`entropy`、`critic_initial_scale` 对当前 Double DQN 不生效；
   `replay_capacity`、`target_update_interval`、`epsilon` 对当前 PPO 不生效。
   现有公共参数值保留，并在原位置标明适用范围，避免误以为调了就会改变训练。

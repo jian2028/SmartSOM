@@ -447,6 +447,8 @@ reward intervals in rewards.jsonl plus scientific component identity; playback n
 re-executes a reward plugin.
 
 PPO params select `return_estimator: episode_return | gae`, `gamma` and `gae_lambda`.
+Optional PPO `lr_final_fraction`/`lr_decay_updates` (linear learning-rate decay) and
+`target_kl` (epoch early stop) are off when absent; see [training sampling](training-sampling.md).
 Default episode_return/gamma=1 preserves prior configurations. Discount is per
 physical tick; GAE lambda is per consecutive decision by the same subject. Native
 Double DQN uses the same physical-time discount and per-subject rewards. Custom
