@@ -11,6 +11,16 @@ from smartsom.learning.subjects import groups
 from smartsom.representations.base.batching import encode_requests, pack
 
 
+def kl_terms(log_ratio, mask):
+    """Per-decision approx KL for the early stop, kept exact for tiny log-ratios.
+
+    float32 ``ratio - 1 - log_ratio`` cancels to zero for small divergences, so the
+    stop statistic uses ``expm1(x) - x`` in double precision.
+    """
+    x = log_ratio[mask].double()
+    return (torch.expm1(x) - x).tolist()
+
+
 class BasePPO:
     def __init__(
         self, options, seed=0, *, training=True, selection="sample", numerical_threads=1
@@ -199,7 +209,7 @@ class BasePPO:
                         with torch.no_grad():
                             log_ratio = distribution.log_prob(selected) - old
                             if settings.target_kl is not None:
-                                epoch_kl += (ratio - 1 - log_ratio)[actor_mask].tolist()
+                                epoch_kl += kl_terms(log_ratio, actor_mask)
                             diagnostics.add(
                                 batch,
                                 {
@@ -260,8 +270,9 @@ class BasePPO:
     def scheduled_lr(self, settings):
         """Linear decay over lr_decay_updates update calls, then constant."""
         progress = min(1.0, self.update_calls / settings.lr_decay_updates)
+        # Interpolate without 1 - lr_final_fraction, which rounds tiny fractions away.
         return settings.learning_rate * (
-            1 - progress * (1 - settings.lr_final_fraction)
+            (1 - progress) + progress * settings.lr_final_fraction
         )
 
     def get_state(self):

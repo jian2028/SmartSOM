@@ -258,3 +258,29 @@ def test_epochs_run_is_a_group_summary_without_entity_keys():
     for loss in losses:
         for g in loss.values():
             assert g["epochs_run"] == {"min": 3, "max": 3}
+
+
+def test_tiny_final_fraction_keeps_its_endpoint():
+    from types import SimpleNamespace
+
+    from smartsom.learning.ppo.learner import BasePPO
+
+    settings = SimpleNamespace(
+        learning_rate=0.001, lr_final_fraction=1e-20, lr_decay_updates=4
+    )
+    clock = SimpleNamespace(update_calls=10)
+    assert BasePPO.scheduled_lr(clock, settings) == pytest.approx(
+        1e-23, rel=1e-9, abs=0
+    )
+
+
+def test_kl_statistic_keeps_tiny_divergences_in_float32():
+    from smartsom.learning.ppo.learner import kl_terms
+
+    log_ratio = torch.full((4,), 2.0**-20, dtype=torch.float32)
+    mask = torch.tensor([True, True, False, True])
+    terms = kl_terms(log_ratio, mask)
+    assert len(terms) == 3
+    expected = (2.0**-20) ** 2 / 2  # expm1(x) - x ~ x**2 / 2
+    assert terms == pytest.approx([expected] * 3, rel=1e-5, abs=0)
+    assert sum(terms) / len(terms) > 1.5 * 1e-13

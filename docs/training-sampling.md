@@ -101,8 +101,10 @@ clock counts update calls in which at least one network took an optimizer step
 (not the minibatch steps themselves) and is stored in the learner checkpoint, so
 a resumed run continues the schedule; checkpoints written before this option
 resume at zero. With `target_kl`, after each epoch of an update the learner
-averages the approximate KL over that epoch's actor-masked decisions, each
-measured in its minibatch before that minibatch's optimizer step; if the mean
+averages the approximate KL (`exp(x) - 1 - x` for log-ratio `x`, computed in
+double precision as `expm1(x) - x` so small divergences do not cancel) over that
+epoch's actor-masked decisions, each measured in its minibatch before that
+minibatch's optimizer step; if the mean
 exceeds `1.5 * target_kl`, the remaining epochs of that update are skipped for
 that network. The check is made once per epoch, on the epoch mean over
 non-forced decisions; if every decision in the batch is forced, no KL is
