@@ -86,6 +86,39 @@ DQN replay ratios or exploration schedules. Existing `episode_return` remains
 selectable; fragment collection necessarily makes its nonterminal targets
 bootstrapped finite-horizon returns.
 
+Two optional PPO stability settings are off when absent:
+
+```yaml
+lr_final_fraction: 0.1   # with lr_decay_updates; in (0, 1]
+lr_decay_updates: 200    # positive integer
+target_kl: 0.02          # positive
+```
+
+`lr_final_fraction` and `lr_decay_updates` must be given together. The Adam
+learning rate then decays linearly from `learning_rate` to `learning_rate *
+lr_final_fraction` over `lr_decay_updates` PPO update calls and stays there. The
+clock counts update calls in which at least one network took an optimizer step
+(not the minibatch steps themselves) and is stored in the learner checkpoint, so
+a resumed run continues the schedule; checkpoints written before this option
+resume at zero. With `target_kl`, after each epoch of an update the learner
+averages the approximate KL (`exp(x) - 1 - x` for log-ratio `x`, computed in
+double precision as `expm1(x) - x` so small divergences do not cancel) over that
+epoch's actor-masked decisions, each measured in its minibatch before that
+minibatch's optimizer step; if the mean
+exceeds `1.5 * target_kl`, the remaining epochs of that update are skipped for
+that network. The check is made once per epoch, on the epoch mean over
+non-forced decisions; if every decision in the batch is forced, no KL is
+measured and the stop never triggers. Actor and critic share one loss and one
+optimizer step, so a triggered stop ends both for that network. A stop also
+skips the remaining epochs' minibatch shuffles, so the minibatch order of later
+networks in the same update depends on earlier stops (deterministic for a given
+seed). The 1.5 factor is a convention common in public PPO implementations, not
+a tuned value. Update losses report `learning_rate` per group when decay is set
+and `epochs_run` (minimum and maximum epochs over the group's networks) when
+`target_kl` is set. Both settings are rejected for Double DQN, including
+per-role overrides. They have so far been exercised only by development
+screening runs.
+
 ## Compatibility and evidence
 
 Maintained YAML files explicitly select their previous serial/episode behavior.

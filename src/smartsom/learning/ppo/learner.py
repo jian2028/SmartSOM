@@ -11,6 +11,16 @@ from smartsom.learning.subjects import groups
 from smartsom.representations.base.batching import encode_requests, pack
 
 
+def kl_terms(log_ratio, mask):
+    """Per-decision approx KL for the early stop, kept exact for tiny log-ratios.
+
+    float32 ``ratio - 1 - log_ratio`` cancels to zero for small divergences, so the
+    stop statistic uses ``expm1(x) - x`` in double precision.
+    """
+    x = log_ratio[mask].double()
+    return (torch.expm1(x) - x).tolist()
+
+
 class BasePPO:
     def __init__(
         self, options, seed=0, *, training=True, selection="sample", numerical_threads=1
@@ -47,6 +57,8 @@ class BasePPO:
         self.generator = torch.Generator().manual_seed(seed)
         self.records = []
         self.updates = 0
+        # update() calls with an optimiser step: the clock of the optional learning-rate decay.
+        self.update_calls = 0
         self.last_losses = {}
         self.bound_policy_states = {}
 
@@ -118,6 +130,7 @@ class BasePPO:
         from smartsom.learning.diagnostics import UpdateDiagnostics
 
         losses = {}
+        stepped = False
         diagnostics = UpdateDiagnostics()
         for group in self.groups:
             rows = [r for r in self.records if r["request"].group == group]
@@ -143,6 +156,7 @@ class BasePPO:
             for row, adv in zip(rows, advantages, strict=True):
                 row["advantage"] = float(adv)
             group_rows = rows
+            epochs_run = {}
             for key in self.ownership.keys[group]:
                 if self.ownership.is_frozen(key):
                     continue
@@ -156,7 +170,13 @@ class BasePPO:
                     if self.pack is pack
                     else None
                 )
+                if settings.lr_final_fraction is not None:
+                    for param_group in self.optimizers[key].param_groups:
+                        param_group["lr"] = self.scheduled_lr(settings)
+                epochs = 0
                 for _ in range(settings.epochs):
+                    epochs += 1
+                    epoch_kl = []
                     self.rng.shuffle(rows)
                     for offset in range(0, len(rows), settings.batch_size):
                         batch = rows[offset : offset + settings.batch_size]
@@ -188,6 +208,8 @@ class BasePPO:
                         loss = actor + critic_loss - settings.entropy * entropy.mean()
                         with torch.no_grad():
                             log_ratio = distribution.log_prob(selected) - old
+                            if settings.target_kl is not None:
+                                epoch_kl += kl_terms(log_ratio, actor_mask)
                             diagnostics.add(
                                 batch,
                                 {
@@ -216,16 +238,42 @@ class BasePPO:
                         nn.utils.clip_grad_norm_(self.models[key].parameters(), 1.0)
                         optimizer.step()
                         self.updates += 1
+                        stepped = True
                         losses[group] = {
                             "actor": float(actor.detach()),
                             "critic": float(critic_loss.detach()),
                             "decisions": len(rows),
                         }
+                    if (
+                        settings.target_kl is not None
+                        and epoch_kl
+                        and sum(epoch_kl) / len(epoch_kl) > 1.5 * settings.target_kl
+                    ):
+                        break
+                epochs_run[key] = epochs
             losses.setdefault(group, {})["decisions"] = len(group_rows)
             losses[group]["update_diagnostics"] = diagnostics.summary(group)
+            if settings.target_kl is not None and epochs_run:
+                # Per-group summary: network keys can carry entity IDs, which stay local.
+                losses[group]["epochs_run"] = {
+                    "min": min(epochs_run.values()),
+                    "max": max(epochs_run.values()),
+                }
+            if settings.lr_final_fraction is not None:
+                losses[group]["learning_rate"] = self.scheduled_lr(settings)
+        if stepped:
+            self.update_calls += 1
         self.records = []
         self.last_losses = losses
         return losses
+
+    def scheduled_lr(self, settings):
+        """Linear decay over lr_decay_updates update calls, then constant."""
+        progress = min(1.0, self.update_calls / settings.lr_decay_updates)
+        # Interpolate without 1 - lr_final_fraction, which rounds tiny fractions away.
+        return settings.learning_rate * (
+            (1 - progress) + progress * settings.lr_final_fraction
+        )
 
     def get_state(self):
         return {
@@ -233,6 +281,7 @@ class BasePPO:
             "models": self.models.state_dict(),
             "optimizers": {g: o.state_dict() for g, o in self.optimizers.items()},
             "updates": self.updates,
+            "update_calls": self.update_calls,
             "rng": self.rng.getstate(),
             "generator": self.generator.get_state(),
             "torch_rng": torch.get_rng_state(),
@@ -245,6 +294,8 @@ class BasePPO:
         for g, o in self.optimizers.items():
             o.load_state_dict(payload["optimizers"][g])
         self.updates = payload["updates"]
+        # Checkpoints written before the learning-rate decay option have no clock.
+        self.update_calls = payload.get("update_calls", 0)
         self.rng.setstate(payload["rng"])
         self.generator.set_state(payload["generator"])
         if "torch_rng" in payload:

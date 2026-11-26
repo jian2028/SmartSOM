@@ -237,6 +237,7 @@
         "tests/integration/test_base_ppo.py",
         "tests/integration/test_current_learning.py",
         "tests/integration/test_network_ownership.py",
+        "tests/integration/test_ppo_stability_options.py",
         "tests/integration/test_research_nodes.py",
         "tests/integration/test_v2_components.py"
       ],
