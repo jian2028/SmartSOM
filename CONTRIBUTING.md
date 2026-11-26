@@ -82,6 +82,19 @@ supporting tests and required documentation with the behavior they verify.
 - Split unrelated objectives into separate branches and pull requests rather
   than combining them in one squash.
 
+## Pull Request Reviews
+
+These conventions apply to any review posted on a GitHub pull request, whether
+written by a person, the `@claude` workflow or another agent.
+
+- Write GitHub reviews in English, whatever language was used to request them.
+- Open one inline thread per independently fixable finding that maps to a
+  changed line, and submit the threads together in one review when possible.
+- Keep the summary comment for the overall assessment and cross-cutting
+  feedback; do not repeat the inline findings there.
+- After fixing a finding, reply in its thread with `Fixed in <sha>` and the
+  relevant verification. Resolve the thread once the fix has been checked.
+
 ## Decision Records
 
 `docs/decisions/README.md` indexes the records and says when one is needed.
