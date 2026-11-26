@@ -243,8 +243,12 @@ class BasePPO:
                 epochs_run[key] = epochs
             losses.setdefault(group, {})["decisions"] = len(group_rows)
             losses[group]["update_diagnostics"] = diagnostics.summary(group)
-            if settings.target_kl is not None:
-                losses[group]["epochs_run"] = epochs_run
+            if settings.target_kl is not None and epochs_run:
+                # Per-group summary: network keys can carry entity IDs, which stay local.
+                losses[group]["epochs_run"] = {
+                    "min": min(epochs_run.values()),
+                    "max": max(epochs_run.values()),
+                }
             if settings.lr_final_fraction is not None:
                 losses[group]["learning_rate"] = self.scheduled_lr(settings)
         if stepped:

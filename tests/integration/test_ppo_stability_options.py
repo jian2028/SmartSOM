@@ -120,14 +120,20 @@ def test_lr_decay_reaches_final_fraction_and_stays():
 def test_kl_early_stop_skips_remaining_epochs_only_when_triggered():
     _, losses = trained(options(target_kl=1e-12))
     runs = [
-        n for loss in losses for g in loss.values() for n in g["epochs_run"].values()
+        n
+        for loss in losses
+        for g in loss.values()
+        for n in (g["epochs_run"]["min"], g["epochs_run"]["max"])
     ]
     # Each minibatch measures KL before its own step, so a one-minibatch first
     # epoch has zero KL; the stop then triggers after at most two epochs.
     assert runs and max(runs) < 3
     _, losses = trained(options(target_kl=1e9))
     runs = [
-        n for loss in losses for g in loss.values() for n in g["epochs_run"].values()
+        n
+        for loss in losses
+        for g in loss.values()
+        for n in (g["epochs_run"]["min"], g["epochs_run"]["max"])
     ]
     assert set(runs) == {3}
 
@@ -209,7 +215,10 @@ def test_mid_decay_resume_applies_the_uninterrupted_rate(tmp_path):
 def test_kl_stop_after_first_epoch_with_several_minibatches():
     _, losses = trained(options(batch_size=4, target_kl=1e-12))
     runs = [
-        n for loss in losses for g in loss.values() for n in g["epochs_run"].values()
+        n
+        for loss in losses
+        for g in loss.values()
+        for n in (g["epochs_run"]["min"], g["epochs_run"]["max"])
     ]
     # Later minibatches of epoch 1 follow optimiser steps, so their KL is positive.
     assert 1 in runs
@@ -232,3 +241,20 @@ def test_per_role_override_cannot_enable_ppo_options_on_dqn():
     }
     with pytest.raises(ValueError, match="PPO settings"):
         BaseAlgorithm.model_validate(data)
+
+
+def test_epochs_run_is_a_group_summary_without_entity_keys():
+    data = options(target_kl=1e9).model_dump(mode="json", by_alias=True)
+    for spec in data["production"]["policies"].values():
+        spec["parameter_sharing"] = {"roles": {"machine": "independent"}}
+    independent = BaseAlgorithm.model_validate(data)
+    # The compiler normally attaches these stable physical identities.
+    independent._owner_ids = {
+        "machine": tuple(m.machine_id for m in base_factory("small").machines)
+    }
+    policy, losses = trained(independent)
+    owner = independent._owner_ids["machine"][0].encode().hex()
+    assert any(key.endswith(owner) for key in policy.optimizers)
+    for loss in losses:
+        for g in loss.values():
+            assert g["epochs_run"] == {"min": 3, "max": 3}

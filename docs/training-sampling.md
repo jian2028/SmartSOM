@@ -112,9 +112,10 @@ skips the remaining epochs' minibatch shuffles, so the minibatch order of later
 networks in the same update depends on earlier stops (deterministic for a given
 seed). The 1.5 factor is a convention common in public PPO implementations, not
 a tuned value. Update losses report `learning_rate` per group when decay is set
-and `epochs_run` per network when `target_kl` is set. Both settings are rejected
-for Double DQN, including per-role overrides. They have so far been exercised
-only by development screening runs.
+and `epochs_run` (minimum and maximum epochs over the group's networks) when
+`target_kl` is set. Both settings are rejected for Double DQN, including
+per-role overrides. They have so far been exercised only by development
+screening runs.
 
 ## Compatibility and evidence
 
