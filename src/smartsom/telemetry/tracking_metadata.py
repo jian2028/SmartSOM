@@ -9,7 +9,18 @@ from uuid import uuid4
 from smartsom.config.codec import read_document
 
 
-def metadata(root, experiment, *, seed=None, variant=None, tags=(), short_name=None):
+def metadata(
+    root,
+    experiment,
+    *,
+    seed=None,
+    variant=None,
+    tags=(),
+    short_name=None,
+    run_meta=None,
+    facts=None,
+    name_field="short_title",
+):
     root = Path(root)
     documents = {"experiment": experiment}
     for kind in ("factory", "workload", "algorithm"):
@@ -80,8 +91,17 @@ def metadata(root, experiment, *, seed=None, variant=None, tags=(), short_name=N
                 ownership = network_ownership(options)
             if any(row["mode"] == "global" for row in ownership.values()):
                 control = "centralized"
+    from smartsom.config.run_meta import select_display_text
+
+    title_prefix = (
+        select_display_text(run_meta, name_field, authored_only=True)
+        if run_meta and name_field != "default"
+        else None
+    )
     short_name = (
-        short_name or Path(experiment.get("run", {}).get("output", root.name)).name
+        title_prefix
+        or short_name
+        or Path(experiment.get("run", {}).get("output", root.name)).name
     )
     label = variant or observation
     parts = [short_name, scale, method, label]
@@ -93,11 +113,30 @@ def metadata(root, experiment, *, seed=None, variant=None, tags=(), short_name=N
         f"map:{scale}",
         f"control:{control}",
     ]
+    if isinstance(run_meta, dict) and run_meta.get("short_title"):
+        automatic.append(f"title:{run_meta['short_title']}")
+    host_name = (
+        facts.get("host", {}).get("name")
+        if isinstance(facts, dict) and isinstance(facts.get("host"), dict)
+        else None
+    )
+    if host_name:
+        automatic.append(f"host:{host_name}")
+    meta_tags = (
+        run_meta.get("tags", [])
+        if isinstance(run_meta, dict) and isinstance(run_meta.get("tags"), list)
+        else []
+    )
     return {
         "name": "－".join(parts),
         "tags": list(
             dict.fromkeys(
-                [*automatic, *experiment.get("run", {}).get("tags", []), *tags]
+                [
+                    *automatic,
+                    *experiment.get("run", {}).get("tags", []),
+                    *meta_tags,
+                    *tags,
+                ]
             )
         ),
         "documents": documents,

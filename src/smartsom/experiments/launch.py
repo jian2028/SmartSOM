@@ -32,7 +32,11 @@ def compile_launch(
     ):
         if incremental:
             raise ValueError("incremental batches require native directory execution")
-        return compile_reservation(entry, **overrides)
+        from smartsom.config.run_meta import launch_batch_meta
+
+        return compile_reservation(
+            entry, base_meta=launch_batch_meta(entry.parent, [entry]), **overrides
+        )
     from smartsom.config.experiment_layout import location
 
     if path.is_file() and location(path) is not None:
@@ -103,6 +107,8 @@ def _run_launch(plan, *, keep_open=False, interactive=False):
         progress=display.get("progress"),
         format=display.get("log_format"),
         every_seconds=display.get("summary_interval"),
+        title_field=display.get("title_field"),
+        description_field=display.get("description_field"),
     ):
         if interactive and plan.operations["launch"]["mode"] == "foreground":
             from smartsom.experiments.foreground import run as foreground

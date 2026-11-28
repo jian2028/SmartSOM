@@ -79,6 +79,11 @@ because the documents do not specify them.
   execute with their dependencies, and unknown impact expands to full verification.
 - Keep source, tests, configuration, and documentation for one logical change
   in the same reviewable checkpoint.
+- When authoring new formal `train` or `evaluate` experiments or batch
+  directories, populate non-scientific `meta` (`short_title`, `long_title`,
+  `short_description`, `full_description`) in the Experiment YAML or batch root
+  `meta.yaml` (`schema: smartsom.experiment-meta/v1`) so terminal monitors,
+  W&B, and external widgets share one source of truth.
 - A passing test establishes engineering behavior only; it does not authorize
   a research claim, milestone promotion, release, or formal experiment.
 - Formal experiments must run from an integrated `main` commit or an explicit

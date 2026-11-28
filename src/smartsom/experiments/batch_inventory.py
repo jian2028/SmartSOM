@@ -49,6 +49,8 @@ def extend_view(root, plan, state, runtime_state):
             state["files"].setdefault(row["id"], {"status": "deferred"})
         plan["inventory"].update(extension["inventory"])
         plan["files"].extend(extension["files"])
+        if plan.get("facts"):
+            plan["facts"].update(extension.get("inventory_facts", {}))
         previous = identity
     for job in runtime_state.get("additions", {}).values():
         if (
@@ -144,6 +146,7 @@ def validate(compiled, plan, root):
 
 def prepare(root, compiled, plan, state, queue_state):
     """Called under the owning queue transaction (and driver claim if inactive)."""
+    from smartsom.config.run_meta import merge_meta
     from smartsom.experiments.reservation import allocate, load
     from smartsom.experiments.reservation_batch import frozen_row
 
@@ -231,10 +234,34 @@ def prepare(root, compiled, plan, state, queue_state):
                     "YAML and retry it before editing the seed list again"
                 )
             child = staging / row["child"]
-            allocate(row["compiled"], root=child, tracking_group=plan["tracking_group"])
+            overrides = merge_meta(plan.get("meta_overrides"), compiled.meta_overrides)
+            member = row["compiled"].with_meta(
+                overrides, defaults=plan.get("meta_defaults")
+            )
+            allocate(member, root=child, tracking_group=plan["tracking_group"])
             child_plan = load(child)
             rows.append(frozen_row(row, child_plan, row["child"]))
-        extension = {**request, "files": rows}
+        extension = {
+            **request,
+            "files": rows,
+            "inventory_facts": {
+                key: compiled.facts[key]
+                for key in (
+                    "task",
+                    "tasks",
+                    "budget",
+                    "algorithms",
+                    "observations",
+                    "controls",
+                    "scenarios",
+                    "factory_ids",
+                    "scales",
+                    "machines",
+                    "agvs",
+                    "orders",
+                )
+            },
+        }
         prepared = {
             "request": request,
             "extension": extension,

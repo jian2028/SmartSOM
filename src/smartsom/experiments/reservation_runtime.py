@@ -103,7 +103,7 @@ def freeze(root, paths, task, extra):
         else {}
     )
     extra = dict(extra)
-    for field in ("tracking_group", "experiment_short_name"):
+    for field in ("tracking_group", "experiment_short_name", "meta", "facts"):
         if extra.get(field) is None and launch_plan.get(field) is not None:
             extra[field] = launch_plan[field]
     if (root / "manifest.json").exists():
@@ -1037,6 +1037,9 @@ def _evaluate(args):
             "drain_ticks": drain,
             "evaluation_protocol": protocol.model_dump(mode="json", by_alias=True),
             "tracking_group": getattr(args, "tracking_group", None),
+            "experiment_short_name": getattr(args, "experiment_short_name", None),
+            "meta": getattr(args, "run_meta", None),
+            "facts": getattr(args, "run_facts", None),
             "methods": methods,
             "checkpoint": Path(args.checkpoint).name if args.checkpoint else None,
             "checkpoint_sha256": checkpoint_digest,

@@ -661,12 +661,28 @@ def render(view):
             )
         else:
             items.append(line("阶段栏高亮当前状态 · 检查点与详细指标见日志", "dim"))
+        panel_title = (
+            view.options.title
+            or (
+                f"SmartSOM · {view.display_title(narrow=view.console.width < 80)}"
+                if getattr(view, "meta", None)
+                else None
+            )
+            or metadata.get("title")
+            or f"SmartSOM · {view.name}"
+        )
+        desc = view.display_description() if getattr(view, "meta", None) else None
+        if desc:
+            desc = " ".join(part.strip() for part in desc.splitlines() if part.strip())
+        panel_subtitle = (
+            f"{desc} · {view.stage} [{view.status}]"
+            if desc
+            else f"{view.stage} [{view.status}]"
+        )
         return Panel(
             Group(*items),
-            title=line(
-                view.options.title or metadata.get("title") or f"SmartSOM · {view.name}"
-            ),
-            subtitle=line(f"{view.stage} [{view.status}]"),
+            title=line(panel_title),
+            subtitle=line(panel_subtitle),
             box=box.SQUARE,
             padding=(0, 1),
         )

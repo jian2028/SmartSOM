@@ -169,8 +169,23 @@ def render_check(plan, *, verbose=False):
         for e in experiments
     ):
         total = f"；总计 {sum(e.train_ticks for e in experiments):,} ticks"
+    meta = plan.resolved_meta() if hasattr(plan, "resolved_meta") else None
+    meta_lines = []
+    if isinstance(meta, dict):
+        if meta.get("short_title") or meta.get("long_title"):
+            title_parts = [
+                part
+                for part in (meta.get("short_title"), meta.get("long_title"))
+                if part
+            ]
+            meta_lines.append("标题：" + " · ".join(dict.fromkeys(title_parts)))
+        if meta.get("short_description"):
+            meta_lines.append("说明：" + meta["short_description"])
+        elif meta.get("auto_summary"):
+            meta_lines.append("自动摘要：" + meta["auto_summary"])
     lines = [
         f"✓ 配置检查通过 · {len(members)} 个任务",
+        *meta_lines,
         f"入口：{_path(source)}",
         f"任务：{_common([e.run.task for e in experiments])} / control={_common([a['control'] for a in algorithms])}",
         f"策略：{_common(methods)}",

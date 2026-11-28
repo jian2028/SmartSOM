@@ -281,6 +281,7 @@ def test_single_file_run_select_reuses_owner_batch(tmp_path, lightweight):
                 str(root),
                 "--select",
                 "train_seeds: [4101]",
+                "--allow-empty-meta",
             ]
         )
         == 0

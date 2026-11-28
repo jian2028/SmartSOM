@@ -3,10 +3,17 @@
 import json
 import time
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from smartsom.config.codec import ConfigurationError, digest
+from smartsom.config.run_meta import (
+    RunMeta,
+    build_auto_summary,
+    extract_facts,
+    merge_meta,
+    resolved_meta,
+)
 from smartsom.experiments.control import requested
 from smartsom.experiments.evidence import (
     implementation_identity,
@@ -38,8 +45,34 @@ class DirectoryPlan:
     incremental: bool = False
     resume_missing: bool = False
     inventory: dict | None = None
+    meta: RunMeta = field(default_factory=RunMeta)
+    facts: dict = field(default_factory=dict)
+    meta_defaults: RunMeta = field(default_factory=RunMeta)
+    meta_overrides: RunMeta = field(default_factory=RunMeta)
+
+    def resolved_meta(self, *, fallback_title: str | None = None) -> dict:
+        facts = self.facts or extract_facts(self)
+        return resolved_meta(
+            self.meta,
+            fallback_title=fallback_title or self.directory.name,
+            auto_summary=build_auto_summary(facts),
+        )
+
+    def with_meta(self, incoming) -> "DirectoryPlan":
+        merged = merge_meta(self.meta, incoming)
+        updated_files = tuple(
+            {**row, "compiled": row["compiled"].with_meta(incoming)}
+            for row in self.files
+        )
+        return replace(
+            self,
+            files=updated_files,
+            meta=merged,
+            meta_overrides=merge_meta(self.meta_overrides, incoming),
+        )
 
     def summary(self):
+        facts = self.facts or extract_facts(self)
         return {
             "status": "checked",
             "input_type": "reservation-directory",
@@ -47,6 +80,8 @@ class DirectoryPlan:
             "output_root": str(self.output_root),
             "count_files": len(self.files),
             "execution_selection": self.selection,
+            "meta": self.resolved_meta(),
+            "facts": facts,
             "files": [
                 {
                     "id": row["id"],

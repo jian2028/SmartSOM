@@ -63,6 +63,7 @@
         "tests/unit/test_rule_actions.py",
         "tests/unit/test_rule_credit_protocol.py",
         "tests/unit/test_run_control.py",
+        "tests/unit/test_run_metadata.py",
         "tests/unit/test_runtime_control.py",
         "tests/unit/test_runtime_display.py",
         "tests/unit/test_runtime_resources.py",

@@ -118,3 +118,4 @@ the earlier one as obsolete.
 | [0082](0082-native-training-sampling-controls.md) | Native sampling and per-network update controls | implementation under review; not a formal experimental result. | [0083](0083-explicit-target-clocks.md) |
 | [0083](0083-explicit-target-clocks.md) | Explicit DQN target clocks and measured replay intensity | implementation under review; not an experimental result. | — |
 | [0084](0084-runtime-memory-policy-and-selected-retry.md) | Configurable native memory policy and selected driver retry | authorized implementation; engineering validation recorded separately. | — |
+| [0085](0085-unified-run-metadata-and-monitor-export.md) | Unified run metadata, display selection and read-only monitor summary | Proposed for PR #51; engineering verification recorded separately. | — |

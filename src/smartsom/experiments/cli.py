@@ -34,6 +34,62 @@ def _display_arguments(parser, *, check=False):
     parser.add_argument(
         "--progress-title", help="presentation title; does not rename experiment files"
     )
+    parser.add_argument(
+        "--title-field",
+        choices=("short_title", "long_title", "combined", "default"),
+        help="which metadata field to render as the monitor title",
+    )
+    parser.add_argument(
+        "--description-field",
+        choices=("short_description", "full_description", "none"),
+        help="which metadata field to render as the monitor subtitle",
+    )
+
+
+def _meta_arguments(command, *, allow_empty=False):
+    group = command.add_argument_group(
+        "Run metadata (non-scientific; shared by terminal, W&B and monitors)"
+    )
+    group.add_argument("--short-title", help="concise code/label (e.g. a5, b6a)")
+    group.add_argument("--long-title", help="descriptive single-line title")
+    group.add_argument(
+        "--short-description",
+        help="one-line experiment description for cards and summaries",
+    )
+    group.add_argument(
+        "--full-description",
+        help="detailed experiment description/notes (also forwarded to W&B notes)",
+    )
+    group.add_argument(
+        "--meta-tag",
+        action="append",
+        dest="meta_tags",
+        default=None,
+        help="display/filter tag merged into run metadata and W&B tags",
+    )
+    if allow_empty:
+        group.add_argument(
+            "--allow-empty-meta",
+            action="store_true",
+            help="bypass required short_title/short_description checks for ad-hoc runs",
+        )
+
+
+def _cli_meta(args):
+    data = {}
+    for attr in (
+        "short_title",
+        "long_title",
+        "short_description",
+        "full_description",
+    ):
+        value = getattr(args, attr, None)
+        if value is not None:
+            data[attr] = value
+    tags = getattr(args, "meta_tags", None)
+    if tags:
+        data["tags"] = tags
+    return data or None
 
 
 def _launch_arguments(command, *, advanced=False, check=False):
@@ -100,6 +156,8 @@ def _operation_overrides(args):
         ("progress", "display", "progress"),
         ("log_format", "display", "log_format"),
         ("summary_interval", "display", "summary_interval"),
+        ("title_field", "display", "title_field"),
+        ("description_field", "display", "description_field"),
     ):
         value = getattr(args, arg, None)
         if value is not None:
@@ -128,6 +186,7 @@ def _parser():
         command.add_argument("run_config", nargs="?")
         command.add_argument("--config")
         _launch_arguments(command, advanced=True, check=name == "check")
+        _meta_arguments(command, allow_empty=name == "run")
         command.add_argument(
             "--id",
             action=EntryAction,
@@ -193,6 +252,27 @@ def _parser():
             command.add_argument("--status")
     command = commands.add_parser("runs")
     command.add_argument("--root", action="append")
+    command.add_argument(
+        "--summary",
+        action="store_true",
+        help="emit unified host, metadata, progress and ETA summary",
+    )
+    command.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable JSON for --summary",
+    )
+    command.add_argument(
+        "--active-only",
+        action="store_true",
+        help="include only running, queued and paused runs in --summary",
+    )
+    command.add_argument(
+        "--recent",
+        type=int,
+        default=20,
+        help="maximum number of completed/failed runs to include in --summary",
+    )
     command = commands.add_parser("wandb")
     sub = command.add_subparsers(
         dest="wandb_command", required=True, parser_class=parser_type
@@ -337,6 +417,8 @@ def _dispatch(args, parser):
         "format": getattr(args, "log_format", None),
         "every_seconds": getattr(args, "summary_interval", None),
         "title": getattr(args, "progress_title", None),
+        "title_field": getattr(args, "title_field", None),
+        "description_field": getattr(args, "description_field", None),
     }
     with display_options(**options):
         return _execute_args(args, parser)
@@ -596,6 +678,24 @@ def _execute_args(args, parser):
                 status=args.status,
             )
         elif args.command == "runs":
+            if getattr(args, "summary", False):
+                from smartsom.telemetry.monitor_summary import (
+                    collect_summary,
+                    render_summary_text,
+                )
+
+                payload = collect_summary(
+                    args.root,
+                    active_only=bool(args.active_only),
+                    recent=args.recent,
+                )
+                if args.json:
+                    print(
+                        json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+                    )
+                else:
+                    print(render_summary_text(payload))
+                return 0
             payload = catalog.list_runs(args.root)
         else:
             payload = catalog.describe(catalog.resolve_run(args.source, args.root))
@@ -802,6 +902,7 @@ def _execute_args(args, parser):
             learning_rate=args.learning_rate,
             profile=args.profile,
             operations=_operation_overrides(args),
+            meta=_cli_meta(args),
         )
         if args.command == "check":
             if args.json:
@@ -816,6 +917,38 @@ def _execute_args(args, parser):
                 print(render_check(plan, verbose=bool(args.verbose)))
             return 0
         else:
+            from smartsom.config.run_meta import (
+                missing_required_fields,
+                prompt_missing_meta,
+                requires_meta,
+            )
+
+            existing_batch = bool(
+                hasattr(plan, "files")
+                and plan.incremental
+                and (plan.output_root / "plan.json").is_file()
+            )
+            if (
+                not existing_batch
+                and requires_meta(plan)
+                and not getattr(args, "allow_empty_meta", False)
+            ):
+                missing = missing_required_fields(plan.meta)
+                if missing:
+                    if sys.stdin.isatty() and sys.stderr.isatty():
+                        completed = prompt_missing_meta(plan.meta, plan.facts)
+                        # Apply only newly prompted fields so pre-existing batch
+                        # meta.yaml values do not overwrite child experiment meta.
+                        delta = {field: getattr(completed, field) for field in missing}
+                        plan = plan.with_meta(delta)
+                    else:
+                        flags = " / ".join(
+                            f"--{field.replace('_', '-')}" for field in missing
+                        )
+                        raise ConfigurationError(
+                            f"missing required run metadata ({', '.join(missing)}); "
+                            f"provide {flags}, set meta in YAML/meta.yaml, or pass --allow-empty-meta"
+                        )
             print(json.dumps({"launch": plan.summary()}, ensure_ascii=False, indent=2))
             payload = run_launch(
                 plan,
@@ -877,14 +1010,25 @@ def _execute_args(args, parser):
             bool(payload.get("remaining")) or payload.get("status") == "rejected"
         )
     elif args.command in {"monitor", "attach"}:
+        from smartsom.experiments.catalog import read_json
         from smartsom.telemetry.monitor import monitor
         from smartsom.telemetry.runtime import OVERRIDES, DisplayOptions
 
+        display = (
+            read_json(args.source / "execution.json")
+            .get("settings", {})
+            .get("display", {})
+        )
+        saved_options = {**display}
+        if "log_format" in display:
+            saved_options["format"] = display["log_format"]
+        if "summary_interval" in display:
+            saved_options["every_seconds"] = display["summary_interval"]
         return monitor(
             args.source,
             once=args.once,
             controlling=args.command == "attach",
-            options=DisplayOptions.from_value(OVERRIDES.get()),
+            options=DisplayOptions.from_value(saved_options, **OVERRIDES.get()),
         )
     elif args.command == "studio":
         from smartsom.studio.app import main as studio_main

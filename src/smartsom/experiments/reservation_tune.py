@@ -201,8 +201,7 @@ def execute(root):
     class BaseTrainable(Trainable):
         def setup(self, config):
             load(config["root"])
-            worker_args, _ = arguments(Path(config["root"]))
-            worker_args.seed = config["seed"]
+            worker_args, _ = arguments(Path(config["root"]), trial_seed=config["seed"])
             worker_args.output = Path(config["root"]) / "seeds" / str(config["seed"])
             worker_args.deadline_unix = config["deadline"]
             self.threads = int(resource_dict(self.trial_resources)["CPU"])

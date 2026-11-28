@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
@@ -15,6 +15,13 @@ from smartsom.config.codec import (
     read_document,
     safe_yaml_dump,
     safe_yaml_load,
+)
+from smartsom.config.run_meta import (
+    RunMeta,
+    build_auto_summary,
+    extract_facts,
+    merge_meta,
+    resolved_meta,
 )
 from smartsom.domain.base_decisions import BASE_CONTRACT
 
@@ -41,6 +48,50 @@ class ReservationPlan:
     operations: dict = field(default_factory=dict)
     origins: dict = field(default_factory=dict)
     scientific_sha256: str = ""
+    meta: RunMeta = field(default_factory=RunMeta)
+    facts: dict = field(default_factory=dict)
+
+    def resolved_meta(self, *, fallback_title: str | None = None) -> dict:
+        if fallback_title is None:
+            source = next(
+                (
+                    Path(path)
+                    for name, path, _ in self.source_files
+                    if name == "experiment"
+                ),
+                None,
+            )
+            if source is not None:
+                fallback_title = (
+                    source.parent.name if source.stem == "experiment" else source.stem
+                )
+        facts = self.facts or extract_facts(self)
+        return resolved_meta(
+            self.meta,
+            fallback_title=fallback_title,
+            auto_summary=build_auto_summary(facts),
+        )
+
+    def with_meta(self, incoming, *, defaults=None) -> "ReservationPlan":
+        merged = merge_meta(defaults, self.meta, incoming)
+        if merged == self.meta:
+            return self
+        docs = dict(self.documents)
+        ex_doc = safe_yaml_load(docs["experiment"])
+        if merged.is_empty():
+            ex_doc.pop("meta", None)
+        else:
+            ex_doc["meta"] = merged.authored_dict()
+        docs["experiment"] = safe_yaml_dump(ex_doc, sort_keys=True)
+        experiment = self.experiment.model_copy(
+            update={"meta": None if merged.is_empty() else merged}
+        )
+        return replace(
+            self,
+            experiment=experiment,
+            documents=tuple(docs.items()),
+            meta=merged,
+        )
 
     def materialize(self, root):
         for name, content in self.components:
@@ -96,6 +147,8 @@ class ReservationPlan:
             "execution": "background"
             if self.experiment.launch.mode == "background"
             else "foreground",
+            "meta": self.resolved_meta(),
+            "facts": self.facts or extract_facts(self),
             "evidence": "development-diagnostic",
         }
 
@@ -112,6 +165,8 @@ def compile_reservation(
     operations=None,
     matrix_sets=None,
     learning_rate=None,
+    meta=None,
+    base_meta=None,
     _case_cache=None,
 ):
     path = Path(path).expanduser().resolve()
@@ -205,6 +260,11 @@ def compile_reservation(
     scene_snapshot = safe_yaml_dump(documents["scenario"], sort_keys=False).encode()
     expand_documents(documents)
     ex = documents["experiment"]
+    merged_meta = merge_meta(base_meta, ex.get("meta"), meta)
+    if merged_meta.is_empty():
+        ex.pop("meta", None)
+    else:
+        ex["meta"] = merged_meta.authored_dict()
     run = ex.setdefault("run", {})
     if task is not None:
         run["task"] = task
@@ -535,7 +595,7 @@ def compile_reservation(
             "evaluation cases must balance the four fault conditions"
         )
     sources = tuple((name, str(p), snapshots[name]) for name, p in paths.items())
-    return ReservationPlan(
+    compiled_plan = ReservationPlan(
         experiment,
         canonical,
         sources,
@@ -558,7 +618,9 @@ def compile_reservation(
         execution,
         origins,
         scientific_identity(documents),
+        merged_meta,
     )
+    return replace(compiled_plan, facts=extract_facts(compiled_plan))
 
 
 def calibration_identity(paths):

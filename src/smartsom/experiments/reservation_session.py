@@ -60,6 +60,8 @@ class ReservationSession:
                 "training_context": self.training_context,
                 "tracking_group": getattr(args, "tracking_group", None),
                 "experiment_short_name": getattr(args, "experiment_short_name", None),
+                "meta": getattr(args, "run_meta", None),
+                "facts": getattr(args, "run_facts", None),
                 "drain_ticks": self.drain,
                 "tick_budget": args.ticks or self.ex.train_ticks,
                 "episode_budget": self.ex.train_episodes,

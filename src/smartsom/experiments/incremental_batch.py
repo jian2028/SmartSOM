@@ -127,6 +127,7 @@ def activate(directory_plan):
         _runtime_initialize(root, plan, state)
         with runtime.transaction(root) as saved:
             plan, state = prepare(root, directory_plan, plan, state, saved)
+            state["selection_revision"] = saved["revision"]
         for row in plan["files"]:
             if (
                 row["id"] in selected

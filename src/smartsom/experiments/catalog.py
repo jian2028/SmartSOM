@@ -66,12 +66,16 @@ def describe(root):
         if read_json(path / "run.json").get("schema") == "smartsom.production-run/v2"
     ]
     commands = [shlex.join(["smartsom", "playback", str(path)]) for path in replay]
+    meta = plan.get("meta") or run.get("meta") or manifest.get("meta")
+    facts = plan.get("facts") or run.get("facts") or manifest.get("facts")
     return {
         "id": str(identity),
         "short_id": short,
         "directory": str(root),
         "status": progress.get("status", "unknown"),
         "current": current,
+        "meta": meta,
+        "facts": facts,
         "algorithm": algorithm.get("production", {}).get(
             "default", algorithm.get("method")
         ),

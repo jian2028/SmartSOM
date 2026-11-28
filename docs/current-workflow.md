@@ -225,7 +225,9 @@ submitting. Task pause/stop holds remain authoritative.
 
 `status` combines run metadata, operational settings and the runtime journal.
 Use `--task-id ID` for a task, `--command-id ID` for a control receipt, and `--json`
-for complete machine-readable output. `runs` lists discoverable runs. `monitor`
+for complete machine-readable output. `runs` lists discoverable runs; add
+`--summary --json` for the unified host/batch/metadata/progress/ETA export
+(`docs/monitor-summary-contract.md`). `monitor`
 is read-only; `attach` enables interactive controls.
 
 A successful whole-run `stop` returns exit code 0 when owned processes have exited,

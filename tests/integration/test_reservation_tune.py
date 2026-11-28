@@ -64,6 +64,12 @@ assert api.resume(root / "train") == {"directory": str(root / "train"), **result
     )
     (tmp_path / "driver.log").write_text(result.stdout + result.stderr)
     assert result.returncode == 0, result.stdout + result.stderr
+    parent = json.loads((tmp_path / "train/plan.json").read_text())
+    assert parent["facts"]["seeds"]["all"] == [101, 102]
+    for seed in (101, 102):
+        child = json.loads((tmp_path / f"train/seeds/{seed}/manifest.json").read_text())
+        assert child["facts"]["seeds"] == {"selected": [seed], "all": [seed]}
+        assert child["meta"]["auto_summary"].endswith(f"s{seed}")
     proof = json.loads((tmp_path / "train/calibration-performance.json").read_text())
     assert any(row["valid"] and row["throughput"] > 0 for row in proof["measurements"])
 

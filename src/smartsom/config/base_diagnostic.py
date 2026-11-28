@@ -24,6 +24,7 @@ from smartsom.config.evaluation_cases import FixedTestPanel
 from smartsom.config.evaluation_protocol import EvaluationProtocol
 from smartsom.config.factory_design import parse_factory_design_file
 from smartsom.config.launch import Concurrency, Display, Launch, Resources, Tracking
+from smartsom.config.run_meta import RunMeta
 from smartsom.domain.production import (
     Demand,
     Outage,
@@ -788,6 +789,8 @@ class BaseExperiment(Strict):
             data.pop("test", None)
         if self.checkpoint_retention == "all":
             data.pop("checkpoint_retention", None)
+        if self.meta is None or self.meta.is_empty():
+            data.pop("meta", None)
         return data
 
     def inputs_for(self, condition, factory, workload):
@@ -880,6 +883,7 @@ class BaseExperiment(Strict):
     display: Display = Field(default_factory=Display)
     output_root: str | None = None
     tracking: TrackingOptions = Field(default_factory=TrackingOptions)
+    meta: RunMeta | None = None
     run: ReservationRun = Field(default_factory=ReservationRun)
 
     @field_validator("train_seeds", mode="before")

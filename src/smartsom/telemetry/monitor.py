@@ -162,8 +162,25 @@ def _read_snapshot(root):
     }
 
 
+def _attach_frozen_meta(root, result):
+    for filename in ("plan.json", "run.json", "manifest.json"):
+        path = native_path(Path(root) / filename)
+        if not path.is_file():
+            continue
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict):
+            if result.get("meta") is None and isinstance(record.get("meta"), dict):
+                result["meta"] = record["meta"]
+            if result.get("facts") is None and isinstance(record.get("facts"), dict):
+                result["facts"] = record["facts"]
+    return result
+
+
 def read_snapshot(root):
-    result = _read_snapshot(root)
+    result = _attach_frozen_meta(root, _read_snapshot(root))
     from smartsom.experiments.control import ACTIVE, alive, processes, read, requested
     from smartsom.experiments.runtime_control import snapshot as runtime_snapshot
 

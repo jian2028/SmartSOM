@@ -126,6 +126,23 @@ def test_active_append_edited_seed_selects_once(tmp_path, lightweight):
     _, plan, _ = author_batch.load(root)
     assert sum(row["id"] == "medium-base--seed-101" for row in plan["files"]) == 1
     assert "medium-base--seed-102" not in runtime_control.snapshot(root)["additions"]
+    from smartsom.telemetry.monitor_summary import summarize_run
+
+    facts = summarize_run(root)["facts"]
+    assert facts["selected_task_count"] == 3
+    assert facts["seeds"]["selected"] == [4101, 101]
+    # A later activation has its own selection, even though old add receipts remain.
+    with runtime_control.transaction(root) as queue:
+        queue["additions"]["medium-base--seed-101"]["status"] = "completed"
+    author_batch.allocate(
+        compile_launch(
+            folder,
+            ids=["medium-base"],
+            selectors=[{"train_seeds": [102]}],
+            operations={"output_root": str(root)},
+        )
+    )
+    assert summarize_run(root)["facts"]["seeds"]["selected"] == [102]
 
 
 def test_seed_append_interruption_retries_original_request(
