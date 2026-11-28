@@ -159,8 +159,12 @@ when it has no owner record, when the process table cannot be read, or when the
 owner's boot context differs from this host's and either belongs to the same Linux
 boot (another PID namespace) or the run's `facts.host.name` does not name this host
 (another machine or a shared filesystem). `facts.host` records the compiling host,
-so a run resumed on another machine may be misread as rebooted. Older runs without `facts.host` are therefore not reconciled after a
-reboot.
+so a run resumed on another machine may be misread as rebooted. Older runs without
+`facts.host` are therefore not reconciled after a reboot.
+
+`smartsom monitor` applies the same check when a stop is under way or its snapshot
+has not changed for more than 5 seconds, so a killed batch leaves `running` there
+too. A stop requested on such an older run before a reboot stays `stopping`.
 
 ## Consumer Field Selection Guide (e.g. Übersicht)
 

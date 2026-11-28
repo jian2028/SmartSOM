@@ -78,7 +78,7 @@ def _bucket_counts(statuses) -> dict[str, int]:
     return counts
 
 
-def _dead_driver_status(
+def dead_driver_status(
     root: Path, process_table, recorded_host, journal_status, ledger_status
 ):
     """Return the status of a run whose recorded processes are confirmed gone.
@@ -458,7 +458,7 @@ def summarize_run(root: Path, *, process_table=None) -> dict:
         or "unknown"
     )
     dead_status = (
-        _dead_driver_status(
+        dead_driver_status(
             root,
             process_table,
             _recorded_host(plan, run_doc, manifest),

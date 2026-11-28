@@ -151,6 +151,52 @@ def test_monitor_resolves_finished_stop_without_second_stop_call(tmp_path, monke
     assert read_snapshot(tmp_path)["status"] == "stopping"
 
 
+def test_monitor_reports_killed_driver_once_snapshot_is_stale(tmp_path, monkeypatch):
+    from smartsom.telemetry.monitor import read_snapshot
+    from smartsom.telemetry.runtime import DisplayOptions, RuntimeDisplay
+
+    view = RuntimeDisplay(
+        DisplayOptions(progress="off", verbose=False), kind="batch-directory"
+    )
+    view.bind(tmp_path)
+    (tmp_path / "control").mkdir()
+    write_json(
+        tmp_path / "control/owner.json",
+        {
+            "schema": "smartsom.run-control/v1",
+            "id": "batch",
+            "status": "running",
+            "owner": {"pid": 101, "created": "birth"},
+            "members": [],
+        },
+    )
+    progress = json.loads((tmp_path / "logs/progress.json").read_text())
+    progress.update(status="running", stage="running", updated_at=time.time())
+    write_json(tmp_path / "logs/progress.json", progress)
+
+    def unexpected():
+        raise AssertionError("a fresh snapshot must not scan processes")
+
+    # A live driver refreshes its snapshot; no process scan is needed.
+    monkeypatch.setattr(control, "processes", unexpected)
+    assert read_snapshot(tmp_path)["status"] == "running"
+
+    # SIGKILL leaves the snapshot at running and stops its updates.
+    progress["updated_at"] = time.time() - 60
+    write_json(tmp_path / "logs/progress.json", progress)
+    monkeypatch.setattr(control, "processes", lambda: {})
+    snapshot = read_snapshot(tmp_path)
+    assert (snapshot["status"], snapshot["stage"]) == ("interrupted", "interrupted")
+
+    # A slow but live driver keeps its recorded status.
+    monkeypatch.setattr(
+        control,
+        "processes",
+        lambda: {101: {"pid": 101, "created": "birth", "state": "R"}},
+    )
+    assert read_snapshot(tmp_path)["status"] == "running"
+
+
 def test_fresh_boundary_bypasses_negative_cache_without_changing_polling(
     tmp_path, monkeypatch
 ):
