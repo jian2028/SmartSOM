@@ -5,6 +5,7 @@ runtime controls remain owned by author_batch and its existing workers.
 """
 
 import json
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,12 @@ from uuid import uuid4
 
 from smartsom.config.codec import ConfigurationError, digest
 from smartsom.config.reservation import compile_reservation
+from smartsom.config.run_meta import (
+    coerce_meta,
+    extract_facts,
+    launch_batch_meta,
+    merge_meta,
+)
 from smartsom.experiments.evidence import source_identity, write_json
 
 
@@ -54,7 +61,10 @@ def compile_files(
     files, inventory, selected = [], {}, []
     member_sources = {}
     output_root, identities, concurrency = None, set(), {}
-    for path, member_id, compiled in compile_members(paths, overrides):
+    cli_meta = overrides.pop("meta", None)
+    batch_file_meta = launch_batch_meta(directory, paths)
+    member_overrides = {**overrides, "meta": cli_meta, "base_meta": batch_file_meta}
+    for path, member_id, compiled in compile_members(paths, member_overrides):
         if not research and member_id in member_sources:
             raise ConfigurationError(
                 f"expanded batch ID {member_id!r} conflicts between {member_sources[member_id]} and {path}"
@@ -127,6 +137,11 @@ def compile_files(
                 document["run"]["seed"] = seed
                 document["run"]["output"] = str(output_root / child)
                 documents["experiment"] = yaml.safe_dump(document, sort_keys=False)
+                member_facts = (
+                    {**compiled.facts, "seeds": {"selected": [seed], "all": [seed]}}
+                    if compiled.facts
+                    else {}
+                )
                 member = replace(
                     compiled,
                     scientific_sha256=scientific_identity(
@@ -134,6 +149,7 @@ def compile_files(
                     ),
                     experiment=BaseExperiment.model_validate(document),
                     documents=tuple(documents.items()),
+                    facts=member_facts,
                 )
                 identity = task_prefix + f"--seed-{seed}"
             scoped = (str(relative_study), member.scientific_sha256)
@@ -181,7 +197,23 @@ def compile_files(
             execution_selection["first_train_seeds"],
             lambda path: relative_id(path, directory),
         )
-    return DirectoryPlan(
+    selected_ids = set(selected) if incremental else None
+    submitted = [
+        row for row in files if selected_ids is None or row["id"] in selected_ids
+    ]
+    if len({row["path"] for row in submitted}) == 1:
+        # A single submitted entry has the same identity through a path or --id.
+        batch_meta = submitted[0]["compiled"].meta
+    elif batch_file_meta is not None:
+        batch_meta = merge_meta(batch_file_meta, cli_meta)
+    else:
+        first_meta = files[0]["compiled"].meta
+        batch_meta = (
+            first_meta
+            if all(row["compiled"].meta == first_meta for row in files)
+            else coerce_meta(cli_meta)
+        )
+    directory_plan = DirectoryPlan(
         directory,
         tuple(files),
         output_root,
@@ -194,7 +226,11 @@ def compile_files(
         resume_missing=resume_missing,
         selection={**execution_selection, "tasks": selected} if incremental else None,
         inventory=inventory if incremental else None,
+        meta=batch_meta,
+        meta_defaults=coerce_meta(batch_file_meta),
+        meta_overrides=coerce_meta(cli_meta),
     )
+    return replace(directory_plan, facts=extract_facts(directory_plan))
 
 
 def allocate_directory(directory_plan):
@@ -204,7 +240,15 @@ def allocate_directory(directory_plan):
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     launch_id = uuid4().hex[:10]
-    tracking_group = directory_plan.directory.name + "-" + stamp + "-" + launch_id
+    meta_payload = directory_plan.resolved_meta(
+        fallback_title=directory_plan.directory.name
+    )
+    group_prefix = meta_payload.get("short_title") or directory_plan.directory.name
+    tracking_group = group_prefix + "-" + stamp + "-" + launch_id
+    facts = {
+        **(directory_plan.facts or extract_facts(directory_plan)),
+        "created_at": time.time(),
+    }
     root = directory_plan.output_root / (
         stamp + "-batch-" + directory_plan.directory.name + "-" + launch_id
     )
@@ -247,6 +291,10 @@ def allocate_directory(directory_plan):
         "runtime_contract": "smartsom.current-runtime/v1",
         "run_id": uuid4().hex,
         "tracking_group": tracking_group,
+        "meta": meta_payload,
+        "meta_defaults": directory_plan.meta_defaults.authored_dict(),
+        "meta_overrides": directory_plan.meta_overrides.authored_dict(),
+        "facts": facts,
         "operations": directory_plan.operations,
         "contract": "reservation",
         "directory": str(directory_plan.directory),
@@ -290,6 +338,8 @@ def allocate_directory(directory_plan):
             "schema": RUN_SCHEMA,
             "kind": "batch-directory",
             "name": root.name,
+            "meta": meta_payload,
+            "facts": facts,
             "status": "prepared",
             "stage": "prepared",
             "plan_sha256": digest(plan),
@@ -343,6 +393,7 @@ def compile_members(paths, overrides):
                     "display",
                     "output_root",
                     "batch",
+                    "meta",
                     "matrix",
                     "factory",
                     "scenario",
@@ -379,6 +430,7 @@ def frozen_row(row, child_plan, child):
         "entry_ids": ["run"],
         "scientific_sha256": [row["scientific_sha256"]],
         "task": row["compiled"].experiment.run.task,
+        "seed": row["compiled"].experiment.run.seed,
         "stage": row["stage"],
         "parallel_files": row["parallel_files"],
         "gate": None,

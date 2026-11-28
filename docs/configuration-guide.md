@@ -20,6 +20,26 @@
 | 故障与维修强度 | Scenario | `factory.machines.defaults.breakdown` |
 | AGV/机器布局与缓冲区容量 | Scenario / Studio | `factory` 中对应资源和布局 |
 | 并发、W&B、资源保护 | Experiment / Profile | `concurrency`、`tracking`、`resources` |
+| 短标题、长标题、简短/完整简介 | Experiment 或批次目录 `meta.yaml` | `meta`（非科学展示字段，不入 `scientific_sha256`） |
+
+## 统一实验元信息（`meta`）
+
+给终端监控、W&B 和桌面组件（如 Übersicht）提供同一套标题和简介，可在单实验 `experiment.yaml` 顶层写 `meta:`，或在目录批次根放 `meta.yaml`（`schema: smartsom.experiment-meta/v1`）：
+
+```yaml
+meta:
+  short_title: a5
+  long_title: K4 五车全角色学习对比
+  short_description: K4 五车，全角色学习
+  full_description: |
+    在 K4 五车场景下对比全角色参数共享 DDQN 与规则基线。
+  tags: [k4, five-agv]
+```
+
+优先级为 `批次 meta.yaml < 单实验 meta < CLI 参数（--short-title/--long-title/--short-description/--full-description）`。
+正式 `train`/`evaluate` 启动时要求提供 `short_title` 和 `short_description`（交互终端会提示补填；非交互 CLI 可用 `--allow-empty-meta` 跳过临时调试）。
+设计新实验（含 AI 辅助生成实验配置）时应一并填写 `meta`；修改 `meta` 不会改变 `scientific_sha256`。
+终端与 W&B 的字段选择可在 `display.title_field` / `display.description_field` 和 `tracking.name_field` / `tracking.notes_field` 中配置。
 
 所有相对文件路径都以当前 YAML 所在目录为起点。`target` 是 Python 模块工厂，
 不是磁盘文件路径；自定义文件组件使用 `path` / `factory`，按对应组件契约传参。

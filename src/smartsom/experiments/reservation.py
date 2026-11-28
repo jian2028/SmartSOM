@@ -99,11 +99,16 @@ def allocate(plan, *, root=None, tracking_group=None):
         Path(path) for name, path, _ in plan.source_files if name == "experiment"
     )
     short_name = source.parent.name if source.stem == "experiment" else source.stem
+    meta_payload = plan.resolved_meta(fallback_title=short_name)
+    group_prefix = meta_payload.get("short_title") or short_name
+    from smartsom.config.run_meta import extract_facts
+
+    facts = {**(plan.facts or extract_facts(plan)), "created_at": time.time()}
     tracking_group = (
         plan.experiment.tracking.group
         or tracking_group
         or (
-            short_name
+            group_prefix
             + "-"
             + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             + "-"
@@ -146,6 +151,8 @@ def allocate(plan, *, root=None, tracking_group=None):
             "run_id": run_id,
             "tracking_group": tracking_group,
             "experiment_short_name": short_name,
+            "meta": meta_payload,
+            "facts": facts,
             "scientific_sha256": plan.scientific_sha256,
             "source": runtime.source_identity(),
             "files": {
@@ -183,18 +190,30 @@ def run(plan):
         return execute_saved(root)
 
 
-def arguments(root):
+def arguments(root, *, trial_seed=None):
     prepared = load_inputs(root / "inputs/experiment.yaml")
     ex = prepared[0]
     settings = ex.run
     frozen = json.loads((root / "plan.json").read_text())
+    meta, facts = frozen.get("meta"), frozen.get("facts")
+    if trial_seed is not None and facts:
+        from smartsom.config.run_meta import build_auto_summary, resolved_meta
+
+        facts = {**facts, "seeds": {"selected": [trial_seed], "all": [trial_seed]}}
+        meta = resolved_meta(
+            meta,
+            fallback_title=frozen.get("experiment_short_name"),
+            auto_summary=build_auto_summary(facts),
+        )
     return SimpleNamespace(
         experiment=root / "inputs/experiment.yaml",
         output=root,
         native=True,
         tracking_group=frozen.get("tracking_group"),
         experiment_short_name=frozen.get("experiment_short_name"),
-        seed=settings.seed,
+        run_meta=meta,
+        run_facts=facts,
+        seed=settings.seed if trial_seed is None else trial_seed,
         seconds=settings.seconds,
         ticks=ex.train_ticks,
         calibration=root / "inputs/calibration.json" if settings.calibration else None,

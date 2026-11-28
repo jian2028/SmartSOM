@@ -162,9 +162,26 @@ def _read_snapshot(root):
     }
 
 
+def _attach_frozen_meta(root, result):
+    for filename in ("plan.json", "run.json", "manifest.json"):
+        path = native_path(Path(root) / filename)
+        if not path.is_file():
+            continue
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict):
+            if result.get("meta") is None and isinstance(record.get("meta"), dict):
+                result["meta"] = record["meta"]
+            if result.get("facts") is None and isinstance(record.get("facts"), dict):
+                result["facts"] = record["facts"]
+    return result
+
+
 def read_snapshot(root):
-    result = _read_snapshot(root)
-    from smartsom.experiments.control import ACTIVE, alive, processes, read, requested
+    result = _attach_frozen_meta(root, _read_snapshot(root))
+    from smartsom.experiments.control import ACTIVE, processes, read, requested
     from smartsom.experiments.runtime_control import snapshot as runtime_snapshot
 
     runtime = runtime_snapshot(root)
@@ -174,29 +191,43 @@ def read_snapshot(root):
     owner = read(root)
     if owner:
         state = owner["status"]
-        if state in ACTIVE and (requested(root) or state == "stopping"):
-            identities = [owner["owner"], *owner["members"]]
-            table = processes()
-            if any(alive(item, table) for item in identities):
+        stopping = state in ACTIVE and (requested(root) or state == "stopping")
+        # A live driver keeps refreshing its snapshot, so only a stop or a stale
+        # snapshot needs the process table (SIGKILL, OOM or a reboot).
+        stale = time.time() - (result.get("updated_at") or 0) > 5
+        if state in ACTIVE and (stopping or stale):
+            from smartsom.telemetry.monitor_summary import (
+                ACTIVE_STATUSES,
+                dead_driver_status,
+            )
+
+            # The durable ledger can finish before the last Rich frame.
+            ledger = Path(root) / "batch.json"
+            if not native_path(ledger).is_file():
+                ledger = Path(root) / "run.json"
+            try:
+                persisted = json.loads(
+                    native_path(ledger).read_text(encoding="utf-8")
+                ).get("status")
+            except (OSError, ValueError):
+                persisted = None
+            host = (result.get("facts") or {}).get("host")
+            dead = dead_driver_status(
+                Path(root),
+                processes,
+                host.get("name") if isinstance(host, dict) else None,
+                "stopping" if stopping else result["status"],
+                persisted if persisted in FINAL else result["status"],
+            )
+            if dead:
+                state = dead
+                if runtime:
+                    runtime.update(status=dead, active=0)
+                for row in result.get("tasks", []):
+                    if row.get("status") in ACTIVE_STATUSES:
+                        row["status"] = dead
+            elif stopping:
                 state = "stopping"
-            else:
-                # The durable ledger can finish before the last Rich frame.
-                ledger = Path(root) / "batch.json"
-                if not native_path(ledger).is_file():
-                    ledger = Path(root) / "run.json"
-                try:
-                    persisted = json.loads(
-                        native_path(ledger).read_text(encoding="utf-8")
-                    ).get("status")
-                except (OSError, ValueError):
-                    persisted = None
-                state = (
-                    persisted
-                    if persisted in FINAL
-                    else result["status"]
-                    if result["status"] in FINAL
-                    else "stopped"
-                )
         if state in FINAL | {"stopping"}:
             result.update(status=state, stage=state)
             control_notice = (

@@ -141,6 +141,8 @@ LABELS = {
 class DisplayOptions:
     title: str | None = None
     task_title: str | None = None
+    title_field: str = "combined"
+    description_field: str = "short_description"
     verbose: bool = True
     debug: bool = False
     progress: str = "auto"
@@ -174,6 +176,19 @@ class DisplayOptions:
             "json",
         }:
             raise ValueError("invalid display mode")
+        if result.title_field not in {
+            "short_title",
+            "long_title",
+            "combined",
+            "default",
+        }:
+            raise ValueError("invalid display title_field")
+        if result.description_field not in {
+            "short_description",
+            "full_description",
+            "none",
+        }:
+            raise ValueError("invalid display description_field")
         return result
 
 
@@ -540,6 +555,9 @@ class RuntimeDisplay:
         self.overview = None
         self.workflow = None
         self.tuning = None
+        self.meta = None
+        self.facts = None
+        self.eta = None
         # A producer that owns a complete resource/throughput sampler opts out
         # of the directory fallback, independently of its rendering profile.
         self.metrics_producer = None
@@ -638,14 +656,48 @@ class RuntimeDisplay:
         self.tuning = tuning
         self.preflight = deepcopy(snapshot.get("preflight"))
         self.execution = deepcopy(snapshot.get("execution"))
+        self.meta = deepcopy(snapshot.get("meta"))
+        self.facts = deepcopy(snapshot.get("facts"))
+        self.eta = deepcopy(snapshot.get("eta"))
         self.updated_at = snapshot["updated_at"]
         self.notice = snapshot.get("notice")
         return self
+
+    def display_title(self, *, narrow=False):
+        from smartsom.config.run_meta import select_display_text
+
+        field = (
+            "short_title"
+            if narrow and self.options.title_field in {"combined", "long_title"}
+            else self.options.title_field
+        )
+        return select_display_text(self.meta, field, fallback=self.name) or self.name
+
+    def display_description(self):
+        from smartsom.config.run_meta import select_display_text
+
+        return select_display_text(
+            self.meta,
+            self.options.description_field,
+            authored_only=True,
+        )
 
     def bind(self, root, name=None):
         if self.root is None:
             self.root = Path(root)
             self.name = name or self.root.name
+            for filename in ("plan.json", "run.json", "manifest.json"):
+                path = native_path(self.root / filename)
+                if path.is_file():
+                    try:
+                        record = json.loads(path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        continue
+                    if isinstance(record, dict):
+                        if self.meta is None and isinstance(record.get("meta"), dict):
+                            self.meta = deepcopy(record["meta"])
+                        if self.facts is None and isinstance(record.get("facts"), dict):
+                            self.facts = deepcopy(record["facts"])
             if not self.readonly:
                 native_path(self.root / "logs").mkdir(parents=True, exist_ok=True)
             self.publish(force=True)
@@ -813,6 +865,8 @@ class RuntimeDisplay:
                 self.console.print(Text(text), soft_wrap=True)
 
     def snapshot(self):
+        from smartsom.config.run_meta import placeholder_eta
+
         return {
             "schema": SCHEMA,
             "name": self.name,
@@ -823,6 +877,9 @@ class RuntimeDisplay:
             "tasks": list(self.tasks.values()),
             "total_tasks": self.total_tasks,
             "notice": self.notice,
+            **({"meta": self.meta} if self.meta is not None else {}),
+            **({"facts": self.facts} if self.facts is not None else {}),
+            "eta": self.eta or placeholder_eta(),
             **(
                 {"console_error": self._console_stream.failure}
                 if self._console_stream.failure is not None
@@ -1261,18 +1318,27 @@ class RuntimeDisplay:
                     total=values.get("evaluation_requested"),
                     completed=values.get("evaluation_finished") or 0,
                 )
-            subtitle = (
+            desc = self.display_description() if self.meta else None
+            if desc:
+                desc = " ".join(
+                    part.strip() for part in desc.splitlines() if part.strip()
+                )
+            base_subtitle = (
                 self.stage
                 if self.stage == self.status
                 else f"{self.stage} [{self.status}]"
             )
+            subtitle = f"{desc} · {base_subtitle}" if desc else base_subtitle
+            panel_title = self.options.title or (
+                f"SmartSOM · {self.display_title(narrow=width < 80)}"
+                if self.meta
+                else f"SmartSOM · {self.name}"
+            )
             return Group(
                 Panel(
                     Group(*lines),
-                    title=Text(
-                        f"SmartSOM · {self.name}", no_wrap=True, overflow="ellipsis"
-                    ),
-                    subtitle=Text(subtitle),
+                    title=Text(panel_title, no_wrap=True, overflow="ellipsis"),
+                    subtitle=Text(subtitle, no_wrap=True, overflow="ellipsis"),
                 ),
                 bars,
             )
@@ -1626,16 +1692,27 @@ class RuntimeDisplay:
             no_wrap=True,
             overflow="ellipsis",
         )
-        title = Text(f"SmartSOM · {self.name}")
+        panel_title = self.options.title or (
+            f"SmartSOM · {self.display_title(narrow=width < 80)}"
+            if self.meta
+            else f"SmartSOM · {self.name}"
+        )
+        title = Text(panel_title)
         title.truncate(max(8, width - 12), overflow="ellipsis")
+        desc = self.display_description() if self.meta else None
+        if desc:
+            desc = " ".join(part.strip() for part in desc.splitlines() if part.strip())
+        base_subtitle = (
+            self.stage if self.stage == self.status else f"{self.stage} [{self.status}]"
+        )
         return Group(
             Panel(
                 Group(table, detail, footer),
                 title=title,
                 subtitle=Text(
-                    self.stage
-                    if self.stage == self.status
-                    else f"{self.stage} [{self.status}]"
+                    f"{desc} · {base_subtitle}" if desc else base_subtitle,
+                    no_wrap=True,
+                    overflow="ellipsis",
                 ),
             ),
             bars,

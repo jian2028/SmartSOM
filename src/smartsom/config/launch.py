@@ -48,6 +48,12 @@ class Display(StrictModel):
     progress: Literal["auto", "on", "off"] = "auto"
     log_format: Literal["text", "json"] = "text"
     summary_interval: float = Field(default=5, gt=0, allow_inf_nan=False)
+    title_field: Literal["short_title", "long_title", "combined", "default"] = (
+        "combined"
+    )
+    description_field: Literal["short_description", "full_description", "none"] = (
+        "short_description"
+    )
 
 
 class Tracking(StrictModel):
@@ -59,6 +65,10 @@ class Tracking(StrictModel):
     tags: list[str] = Field(default_factory=list)
     variant: str | None = None
     upload_interval: float = Field(default=5, gt=0, allow_inf_nan=False)
+    name_field: Literal["short_title", "long_title", "default"] = "short_title"
+    notes_field: Literal["full_description", "short_description", "none"] = (
+        "full_description"
+    )
 
 
 class Profile(StrictModel):
@@ -207,6 +217,7 @@ def scientific_documents(documents):
         "display",
         "output_root",
         "batch",
+        "meta",
     ):
         ex.pop(key, None)
     for key in OPERATION_RUN_KEYS:

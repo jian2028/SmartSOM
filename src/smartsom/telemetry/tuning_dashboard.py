@@ -1123,6 +1123,30 @@ def runtime_detail(view, row, task):
         if reason:
             section("失败 / 阻塞原因")
             content.append(Text(str(reason), style="bold red"))
+        meta = getattr(view, "meta", None)
+        facts = getattr(view, "facts", None)
+        if isinstance(meta, dict) or isinstance(facts, dict):
+            section("实验信息")
+            if isinstance(meta, dict):
+                if meta.get("short_title"):
+                    field("短标题", meta["short_title"])
+                if meta.get("long_title"):
+                    field("长标题", meta["long_title"])
+                if meta.get("short_description"):
+                    field("简短说明", meta["short_description"])
+                if meta.get("full_description"):
+                    field("完整说明", meta["full_description"])
+                elif meta.get("auto_summary"):
+                    field("自动摘要", meta["auto_summary"])
+            if isinstance(facts, dict):
+                seeds = (facts.get("seeds") or {}).get("selected") or (
+                    facts.get("seeds") or {}
+                ).get("all")
+                if seeds:
+                    field("Seeds", ", ".join(map(str, seeds)))
+                host_name = (facts.get("host") or {}).get("name")
+                if host_name:
+                    field("主机", host_name)
         progress = task_work_progress(row, plan, row.get("execution"))
         phase, phase_fraction, stages = runtime_phase(row)
         section("运行进度")
@@ -1815,6 +1839,26 @@ def runtime_render(view):
         or (receipt.get("progress") or {}).get("state") in {"waiting", "failed"}
         else ""
     )
+    resolved_title = view.options.title or (
+        f"SmartSOM · {view.display_title(narrow=view.console.width < 80)}"
+        if getattr(view, "meta", None)
+        else f"SmartSOM · {view.name}"
+    )
+    description_text = (
+        view.display_description() if getattr(view, "meta", None) else None
+    )
+    if description_text:
+        description_text = " ".join(
+            part.strip() for part in description_text.splitlines() if part.strip()
+        )
+    mode_status = (
+        ("控制模式" if view.controlling else "只读监控")
+        + " · "
+        + runtime_status(state.get("status", view.status))
+    )
+    subtitle_text = getattr(view, "observation_notice", None) or (
+        f"{description_text} · {mode_status}" if description_text else mode_status
+    )
     return render_runtime_panel(
         view,
         header=header,
@@ -1823,13 +1867,8 @@ def runtime_render(view):
         cards=cells,
         table_rows=table_rows,
         total_tasks=len(canonical),
-        title=line(view.options.title or f"SmartSOM · {view.name}"),
-        subtitle=line(
-            getattr(view, "observation_notice", None)
-            or ("控制模式" if view.controlling else "只读监控")
-            + " · "
-            + runtime_status(state.get("status", view.status))
-        ),
+        title=line(resolved_title),
+        subtitle=line(subtitle_text),
         reason=line("调度原因 · " + str(reason)),
         feedback=[
             line(value, feedback_style) for value in runtime_feedback_lines(view)

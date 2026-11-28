@@ -26,6 +26,8 @@ def resolved(options):
         "tags": list(options.tags),
         "variant": options.variant,
         "upload_interval": options.upload_interval,
+        "name_field": getattr(options, "name_field", "short_title"),
+        "notes_field": getattr(options, "notes_field", "full_description"),
     }
 
 
@@ -177,6 +179,8 @@ class ExperimentTracking:
             or manifest.get("tracking_group")
             or launch_group(self.root.name, manifest)
         )
+        self.run_meta = manifest.get("meta")
+        self.run_facts = manifest.get("facts")
         self.labels = metadata(
             self.root,
             config,
@@ -184,6 +188,9 @@ class ExperimentTracking:
             variant=self.settings["variant"],
             tags=self.settings["tags"],
             short_name=manifest.get("experiment_short_name"),
+            run_meta=self.run_meta,
+            facts=self.run_facts,
+            name_field=self.settings.get("name_field", "short_title"),
         )
         self.training_seed = manifest.get("training_seed", manifest.get("seed"))
         self.planned_seeds = len(config.get("train_seeds", [])) or 1
@@ -215,6 +222,7 @@ class ExperimentTracking:
             name=self.labels["name"],
             tags=self.labels["tags"],
             comparison=self.labels["comparison"],
+            **({"meta": self.run_meta} if self.run_meta is not None else {}),
             segments=self.segments,
             online_identity=previous.get("online_identity"),
             upload_errors=previous.get("upload_errors", 0),
@@ -280,6 +288,29 @@ class ExperimentTracking:
 
                 scope.finalize_with("wandb", teardown)
 
+            from smartsom.config.run_meta import select_display_text
+
+            notes = select_display_text(
+                self.run_meta,
+                self.settings.get("notes_field", "full_description"),
+                authored_only=True,
+            )
+            wandb_config = {
+                "experiment": config,
+                "resolved_inputs": labels["documents"],
+                "comparison": labels["comparison"],
+                "source_commit": manifest["source"]["commit"],
+                "implementation_sha256": manifest["source"]["implementation_sha256"],
+                "input_sha256": manifest["inputs"],
+                "scientific_sha256": manifest.get("scientific_sha256"),
+                "seed": self.training_seed,
+                "checkpoint_sha256": manifest.get("checkpoint_sha256"),
+                "experiment_id": self.status["experiment_id"],
+            }
+            if self.run_meta is not None:
+                wandb_config["meta"] = self.run_meta
+            if self.run_facts is not None:
+                wandb_config["facts"] = self.run_facts
             self.run = wandb.init(
                 project=self.settings["project"],
                 entity=self.settings["entity"],
@@ -288,24 +319,12 @@ class ExperimentTracking:
                 id=run_id,
                 name=labels["name"],
                 tags=labels["tags"],
+                **({"notes": notes} if notes is not None else {}),
                 dir=str(self.root / "tracking"),
                 mode=self.settings["mode"],
                 resume="must" if previous.get("online_run_id") else None,
                 reinit="create_new",
-                config={
-                    "experiment": config,
-                    "resolved_inputs": labels["documents"],
-                    "comparison": labels["comparison"],
-                    "source_commit": manifest["source"]["commit"],
-                    "implementation_sha256": manifest["source"][
-                        "implementation_sha256"
-                    ],
-                    "input_sha256": manifest["inputs"],
-                    "scientific_sha256": manifest.get("scientific_sha256"),
-                    "seed": self.training_seed,
-                    "checkpoint_sha256": manifest.get("checkpoint_sha256"),
-                    "experiment_id": self.status["experiment_id"],
-                },
+                config=wandb_config,
                 settings=wandb.Settings(
                     init_timeout=30,
                     finish_timeout=15,

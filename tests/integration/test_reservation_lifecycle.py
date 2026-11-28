@@ -176,7 +176,14 @@ def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, cali
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
-    cli("run", batch_inputs, "--max-concurrent", "1", "--foreground")
+    cli(
+        "run",
+        batch_inputs,
+        "--max-concurrent",
+        "1",
+        "--foreground",
+        "--allow-empty-meta",
+    )
     (root,) = (tmp_path / "batch-output").iterdir()
     parent = json.loads((root / "batch.json").read_text())
     assert parent["status"] == "completed"
@@ -596,6 +603,7 @@ def test_actual_native_worker_pause_resume_and_stop(tmp_path, calibrated):
                 "--foreground",
                 "--max-concurrent",
                 "1",
+                "--allow-empty-meta",
                 "--progress",
                 "off",
             ],
