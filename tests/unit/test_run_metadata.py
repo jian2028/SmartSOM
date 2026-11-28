@@ -665,6 +665,181 @@ def test_summary_prioritizes_newer_failed_launch_over_stale_journal(tmp_path, pr
     assert collect_summary([tmp_path], active_only=True)["counts"]["running"] == 1
 
 
+def _write_running_batch(root, task_statuses, *, ledger=None, journal="running"):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "plan.json").write_text(
+        json.dumps({"files": [{"id": tid} for tid in task_statuses]})
+    )
+    if ledger:
+        (root / "batch.json").write_text(json.dumps({"status": ledger}))
+    (root / "control").mkdir()
+    (root / "control/runtime.json").write_text(
+        json.dumps(
+            {
+                "status": journal,
+                "tasks": {
+                    tid: {"status": status} for tid, status in task_statuses.items()
+                },
+            }
+        )
+    )
+    owner = {"pid": 4101, "created": "100:1", "context": "boot-a"}
+    member = {"pid": 4102, "created": "100:2", "context": "boot-a"}
+    (root / "control/owner.json").write_text(
+        json.dumps({"status": "running", "owner": owner, "members": [member]})
+    )
+    return member
+
+
+@pytest.mark.parametrize(
+    ("ledger", "expected"), [(None, "interrupted"), ("stopped", "stopped")]
+)
+def test_summary_reconciles_running_journal_whose_processes_are_gone(
+    tmp_path, monkeypatch, ledger, expected
+):
+    from smartsom.telemetry.monitor_summary import summarize_run
+
+    monkeypatch.setattr(
+        "smartsom.experiments.control.session_context", lambda: "boot-a"
+    )
+    root = tmp_path / "killed"
+    member = _write_running_batch(
+        root, {"a": "running", "b": "starting", "c": "queued"}, ledger=ledger
+    )
+
+    # SIGKILL/OOM/reboot left the journal at running; no recorded process exists.
+    view = summarize_run(root, process_table=lambda: {})
+    assert (view["status"], view["stage"]) == (expected, expected)
+    assert view["progress"]["active_tasks"] == 0
+    assert view["progress"]["queued_tasks"] == 1  # Unstarted work stays resumable.
+    assert view["progress"][f"{'failed' if ledger is None else 'stopped'}_tasks"] == 2
+
+    # A recycled PID with another start time is not the recorded process.
+    recycled = {4102: {**member, "created": "999:9", "state": "S"}}
+    assert summarize_run(root, process_table=lambda: recycled)["status"] == expected
+
+    live = {4102: {**member, "state": "S"}}
+    view = summarize_run(root, process_table=lambda: live)
+    assert view["status"] == "running"
+    assert view["progress"]["active_tasks"] == 2
+
+    monkeypatch.setattr("smartsom.experiments.control.processes", lambda: {})
+    summary = collect_summary([tmp_path])
+    assert summary["counts"]["running"] == 0
+    assert summary["counts"]["failed" if ledger is None else "stopped"] == 1
+
+    # Another boot context cannot be judged unless the run was recorded on this host,
+    # where it means a reboot.
+    monkeypatch.setattr(
+        "smartsom.experiments.control.session_context", lambda: "boot-b"
+    )
+    assert summarize_run(root, process_table=lambda: {})["status"] == "running"
+    plan = json.loads((root / "plan.json").read_text())
+    from smartsom.config.run_meta import host_identity
+
+    plan["facts"] = {"host": host_identity()}
+    (root / "plan.json").write_text(json.dumps(plan))
+    assert summarize_run(root, process_table=lambda: {})["status"] == expected
+
+    # Same Linux boot seen from another PID namespace cannot be judged.
+    owner = json.loads((root / "control/owner.json").read_text())
+    owner["owner"]["context"] = "linux:boot-1:pid:[1]"
+    (root / "control/owner.json").write_text(json.dumps(owner))
+    monkeypatch.setattr(
+        "smartsom.experiments.control.session_context", lambda: "linux:boot-1:pid:[2]"
+    )
+    assert summarize_run(root, process_table=lambda: {})["status"] == "running"
+
+    # A background launcher that has not yet bound a new owner keeps the run live.
+    launcher = {"pid": 4200, "created": "200:1"}
+    (root / "control/background-launch.lock").write_text(json.dumps(launcher))
+    table = {4200: {**launcher, "state": "S"}}
+    monkeypatch.setattr(
+        "smartsom.experiments.control.session_context", lambda: "boot-a"
+    )
+    owner["owner"]["context"] = "boot-a"
+    (root / "control/owner.json").write_text(json.dumps(owner))
+    assert summarize_run(root, process_table=lambda: table)["status"] == "running"
+
+
+@pytest.mark.parametrize("journal", ["stopping", "stop_requested"])
+def test_summary_reports_dead_stopping_run_as_stopped(tmp_path, monkeypatch, journal):
+    from smartsom.telemetry.monitor_summary import summarize_run
+
+    monkeypatch.setattr(
+        "smartsom.experiments.control.session_context", lambda: "boot-a"
+    )
+    _write_running_batch(tmp_path, {"a": "running"}, journal=journal)
+    view = summarize_run(tmp_path, process_table=lambda: {})
+    assert view["status"] == "stopped"
+    assert view["progress"]["stopped_tasks"] == 1
+
+
+def test_summary_buckets_partition_every_runtime_status(tmp_path, monkeypatch):
+    from smartsom.telemetry.monitor_summary import summarize_run
+
+    statuses = {
+        "a": "starting",  # persisted before spawn, including retries
+        "b": "stopped",
+        "c": "partial_stopped",
+        "d": "ineligible",
+        "e": "completed",
+        "f": "removed",
+        "g": "mystery",
+    }
+    root = tmp_path / "batch"
+    _write_running_batch(root, statuses)
+    live = {4101: {"pid": 4101, "created": "100:1", "context": "boot-a", "state": "S"}}
+    progress = summarize_run(root, process_table=lambda: live)["progress"]
+    buckets = {
+        name: progress[f"{name}_tasks"]
+        for name in (
+            "active",
+            "queued",
+            "paused",
+            "completed",
+            "failed",
+            "stopped",
+            "removed",
+            "other",
+        )
+    }
+    assert buckets == {
+        "active": 1,
+        "queued": 0,
+        "paused": 0,
+        "completed": 1,
+        "failed": 1,
+        "stopped": 2,
+        "removed": 1,
+        "other": 1,
+    }
+    assert sum(buckets.values()) == progress["total_tasks"] == 7
+
+    for name, status in {
+        "s": "stopped",
+        "p": "partial_removed",
+        "i": "ineligible",
+        "c": "completed",
+    }.items():
+        (tmp_path / "runs" / name).mkdir(parents=True)
+        (tmp_path / "runs" / name / "run.json").write_text(
+            json.dumps({"status": status})
+        )
+    counts = collect_summary([tmp_path / "runs"])["counts"]
+    assert counts == {
+        "running": 0,
+        "queued": 0,
+        "paused": 0,
+        "completed": 1,
+        "failed": 1,
+        "stopped": 2,
+        "removed": 0,
+        "other": 0,
+        "total": 4,
+    }
+
+
 @pytest.mark.parametrize("status", ["smoke", "calibrating", "evaluating"])
 def test_active_native_tasks_and_case_progress(tmp_path, status):
     from smartsom.telemetry.monitor_summary import summarize_run

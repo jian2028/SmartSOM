@@ -41,6 +41,9 @@ uv run --no-sync smartsom runs --summary --json --active-only
     "paused": 0,
     "completed": 12,
     "failed": 0,
+    "stopped": 0,
+    "removed": 0,
+    "other": 0,
     "total": 19
   },
   "batches": [ ... ]
@@ -106,8 +109,10 @@ Each element of `batches` has the following stable structure (active first, then
     "failed_tasks": 0,
     "paused_tasks": 0,
     "queued_tasks": 2,
-    "deferred_tasks": 0,
+    "stopped_tasks": 0,
     "removed_tasks": 0,
+    "other_tasks": 0,
+    "deferred_tasks": 0,
     "total_tasks": 4,
     "fraction": 0.09,
     "episodes": { "min": 178, "max": 182, "budget": 1000 },
@@ -126,6 +131,36 @@ Each element of `batches` has the following stable structure (active first, then
   "updated_at": 1795774498.0
 }
 ```
+
+## Status Buckets and Liveness
+
+`counts` (per run) and the `*_tasks` fields (per child task) partition every status,
+so the buckets always sum to `total` / `total_tasks`; deferred tasks sit outside
+`total_tasks`.
+
+| Bucket | Statuses |
+|---|---|
+| `running` / `active` | `running`, `starting`, `active`, `draining`, `pausing`, `stop_requested`, `stopping`, `training`, `evaluating`, `calibrating`, `smoke` |
+| `queued` | `queued`, `pending`, `waiting`, `waiting_resources`, `prepared`, `allocated` |
+| `paused` | `paused` |
+| `completed` | `completed`, `wall_budget_reached`, `frozen`, `recommended` |
+| `failed` | `failed`, `interrupted`, `force_stopped`, `finished_with_failures`, `completed_with_failures`, `ineligible` |
+| `stopped` | `stopped`, `partial`, `partial_stopped`, `partial_removed`, `early_stopped`, `pruned`, `truncated`, `incomplete` |
+| `removed` | `removed`, `removing` |
+| `other` | any other or `unknown` status |
+
+A run that claims an active status is checked against the processes recorded in
+`control/owner.json` (PID plus start time and boot context), its owned sessions and
+any pending background launcher. When none of them is alive, as after SIGKILL, OOM
+or a reboot, the summary reports, in order: the finished ledger status, a finished
+owner status, `stopped` when a stop was requested or under way, and `interrupted`
+otherwise. Its active child tasks take that status. A run keeps its recorded status
+when it has no owner record, when the process table cannot be read, or when the
+owner's boot context differs from this host's and either belongs to the same Linux
+boot (another PID namespace) or the run's `facts.host.name` does not name this host
+(another machine or a shared filesystem). `facts.host` records the compiling host,
+so a run resumed on another machine may be misread as rebooted. Older runs without `facts.host` are therefore not reconciled after a
+reboot.
 
 ## Consumer Field Selection Guide (e.g. Übersicht)
 

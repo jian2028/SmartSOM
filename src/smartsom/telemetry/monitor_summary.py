@@ -3,7 +3,9 @@
 import hashlib
 import json
 import os
+import subprocess
 import time
+from functools import cache
 from pathlib import Path
 
 from smartsom.config.launch import project_root
@@ -13,6 +15,9 @@ from smartsom.config.run_meta import (
     placeholder_eta,
     resolved_meta,
 )
+from smartsom.experiments.runtime_control import QUEUED as RUNTIME_QUEUED
+from smartsom.telemetry.runtime import FAILURES as RUNTIME_FAILURES
+from smartsom.telemetry.runtime import FINAL as RUNTIME_FINAL
 
 SUMMARY_SCHEMA = "smartsom.monitor-summary/v1"
 EXCLUDED_PARTS = {
@@ -24,34 +29,119 @@ EXCLUDED_PARTS = {
     "checkpoints",
     "replay",
 }
+# Buckets partition every status: anything not named below counts as "other",
+# so the bucket counts always sum to the total.
 ACTIVE_STATUSES = {
     "running",
+    "starting",
     "active",
     "draining",
     "pausing",
+    "stop_requested",
     "stopping",
     "training",
     "evaluating",
     "calibrating",
     "smoke",
 }
-QUEUED_STATUSES = {
-    "queued",
-    "pending",
-    "waiting",
-    "waiting_resources",
-    "prepared",
-    "allocated",
-}
+QUEUED_STATUSES = RUNTIME_QUEUED | {"prepared", "allocated"}
 PAUSED_STATUSES = {"paused"}
-FAILED_STATUSES = {
-    "failed",
-    "interrupted",
-    "force_stopped",
-    "finished_with_failures",
-    "completed_with_failures",
-}
+FAILED_STATUSES = RUNTIME_FAILURES | {"force_stopped"}
 COMPLETED_STATUSES = {"completed", "wall_budget_reached", "frozen", "recommended"}
+REMOVED_STATUSES = {"removed", "removing"}
+# Ended without failure before finishing all selected work.
+STOPPED_STATUSES = (
+    RUNTIME_FINAL - FAILED_STATUSES - COMPLETED_STATUSES - REMOVED_STATUSES
+)
+BUCKETS = (
+    ("active", ACTIVE_STATUSES),
+    ("queued", QUEUED_STATUSES),
+    ("paused", PAUSED_STATUSES),
+    ("completed", COMPLETED_STATUSES),
+    ("failed", FAILED_STATUSES),
+    ("stopped", STOPPED_STATUSES),
+    ("removed", REMOVED_STATUSES),
+)
+
+
+def _bucket(status) -> str:
+    for name, statuses in BUCKETS:
+        if status in statuses:
+            return name
+    return "other"
+
+
+def _bucket_counts(statuses) -> dict[str, int]:
+    counts = dict.fromkeys([name for name, _ in BUCKETS] + ["other"], 0)
+    for status in statuses:
+        counts[_bucket(status)] += 1
+    return counts
+
+
+def _dead_driver_status(
+    root: Path, process_table, recorded_host, journal_status, ledger_status
+):
+    """Return the status of a run whose recorded processes are confirmed gone.
+
+    None means the run may still be live or liveness cannot be judged here.
+    """
+    from smartsom.experiments.control import (
+        alive,
+        read,
+        session_context,
+        session_members,
+    )
+
+    try:
+        owner = read(root)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(owner, dict) or not isinstance(owner.get("owner"), dict):
+        return None  # No owner record: liveness cannot be judged.
+    context, here = owner["owner"].get("context"), session_context()
+    if context not in (None, here):
+        if (
+            str(context).startswith("linux:")
+            and str(context).rsplit(":", 1)[0] == str(here).rsplit(":", 1)[0]
+        ):
+            return None  # Same Linux boot, another PID namespace.
+        if recorded_host != host_identity()["name"]:
+            return None  # Another host; on the recorded host this means a reboot.
+    try:
+        table = process_table()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None  # The process table is unavailable on this platform.
+    # Same predicate as the delete guard: recorded processes, owned sessions
+    # and a background launcher that has not yet bound a new owner.
+    identities = [owner["owner"], *(owner.get("members") or [])]
+    launcher = _read_json(root / "control/background-launch.lock")
+    if (
+        any(isinstance(item, dict) and alive(item, table) for item in identities)
+        or session_members(owner, table)
+        or (launcher.get("pid") is not None and alive(launcher, table))
+    ):
+        return None
+    if ledger_status in RUNTIME_FINAL:
+        return ledger_status
+    if owner.get("status") in RUNTIME_FINAL:
+        return owner["status"]
+    stopping = {"stop_requested", "stopping"}
+    stop = _read_json(root / "control/stop.json")
+    if (
+        journal_status in stopping
+        or owner.get("status") in stopping
+        or (stop.get("id") is not None and stop.get("id") == owner.get("id"))
+    ):
+        return "stopped"  # An operator stop, not a crash.
+    return "interrupted"  # SIGKILL, OOM or a reboot skipped the final write.
+
+
+def _recorded_host(*documents):
+    for document in documents:
+        host = (document.get("facts") or {}).get("host")
+        if isinstance(host, dict) and host.get("name"):
+            return host["name"]
+    return None
 
 
 def _read_json(path: Path) -> dict:
@@ -196,6 +286,7 @@ def _aggregate_progress(
     progress_doc: dict,
     live_snapshot: dict,
     status: str,
+    alive_driver: bool = True,
 ) -> dict:
     is_batch = plan.get("schema") == "smartsom.author-batch-plan/v1" or isinstance(
         plan.get("files"), list
@@ -228,14 +319,14 @@ def _aggregate_progress(
                 for row in live_snapshot["tasks"]
             ]
 
-        active = sum(c["status"] in ACTIVE_STATUSES for c in children)
-        completed = sum(c["status"] in COMPLETED_STATUSES for c in children)
-        failed = sum(c["status"] in FAILED_STATUSES for c in children)
-        paused = sum(c["status"] in PAUSED_STATUSES for c in children)
-        queued = sum(c["status"] in QUEUED_STATUSES for c in children)
+        if not alive_driver:
+            # A dead driver leaves its last journal behind; nothing is running now.
+            for child in children:
+                if child["status"] in ACTIVE_STATUSES:
+                    child["status"] = status
         deferred = sum(c["status"] == "deferred" for c in children)
-        removed = sum(c["status"] in {"removed", "removing"} for c in children)
         non_deferred = [c for c in children if c["status"] != "deferred"]
+        buckets = _bucket_counts(c["status"] for c in non_deferred or children)
         total = len(non_deferred) or len(children)
 
         ep_counts, ep_budgets, fractions = [], [], []
@@ -269,13 +360,8 @@ def _aggregate_progress(
         budget_set = set(ep_budgets)
         fraction = round(sum(fractions) / len(fractions), 4) if fractions else None
         return {
-            "active_tasks": active,
-            "completed_tasks": completed,
-            "failed_tasks": failed,
-            "paused_tasks": paused,
-            "queued_tasks": queued,
+            **{f"{name}_tasks": count for name, count in buckets.items()},
             "deferred_tasks": deferred,
-            "removed_tasks": removed,
             "total_tasks": total,
             "fraction": fraction,
             "episodes": {
@@ -295,13 +381,8 @@ def _aggregate_progress(
     tick_b = progress_doc.get("tick_budget")
     fraction = _progress_fraction(progress_doc, status)
     return {
-        "active_tasks": int(status in ACTIVE_STATUSES),
-        "completed_tasks": int(status in COMPLETED_STATUSES),
-        "failed_tasks": int(status in FAILED_STATUSES),
-        "paused_tasks": int(status in PAUSED_STATUSES),
-        "queued_tasks": int(status in QUEUED_STATUSES),
+        **{f"{name}_tasks": count for name, count in _bucket_counts([status]).items()},
         "deferred_tasks": 0,
-        "removed_tasks": 0,
         "total_tasks": 1,
         "fraction": round(fraction, 4) if fraction is not None else None,
         "episodes": {
@@ -316,8 +397,11 @@ def _aggregate_progress(
     }
 
 
-def summarize_run(root: Path) -> dict:
+def summarize_run(root: Path, *, process_table=None) -> dict:
+    """Summarize one run; `process_table` returns the host table for liveness checks."""
     root = Path(root).resolve()
+    if process_table is None:
+        from smartsom.experiments.control import processes as process_table
     plan = _read_json(root / "plan.json")
     run_doc = _read_json(root / "run.json")
     manifest = _read_json(root / "manifest.json")
@@ -349,15 +433,17 @@ def summarize_run(root: Path) -> dict:
     journal_status = runtime.get("status")
     ledger_status = (batch if is_batch else progress_doc).get("status")
     # The driver may fail before the prepared scheduler takes ownership.
-    from smartsom.telemetry.runtime import FINAL
-
-    if journal_status and ledger_status in FINAL and journal_status != ledger_status:
+    if (
+        journal_status
+        and ledger_status in RUNTIME_FINAL
+        and journal_status != ledger_status
+    ):
         # A finished prior journal can also predate a failed background relaunch.
         ledger_time = _best_mtime(
             root, ("batch.json" if is_batch else "progress.json",)
         )
         journal_time = _best_mtime(root, ("control/runtime.json",))
-        if (journal_status == "prepared" or journal_status in FINAL) and (
+        if (journal_status == "prepared" or journal_status in RUNTIME_FINAL) and (
             ledger_time is not None
             and journal_time is not None
             and ledger_time >= journal_time
@@ -371,12 +457,28 @@ def summarize_run(root: Path) -> dict:
         or run_doc.get("status")
         or "unknown"
     )
+    dead_status = (
+        _dead_driver_status(
+            root,
+            process_table,
+            _recorded_host(plan, run_doc, manifest),
+            status,
+            ledger_status,
+        )
+        if status in ACTIVE_STATUSES
+        else None
+    )
+    alive_driver = dead_status is None
+    if not alive_driver:
+        status = dead_status
     stage = (
         live_snapshot.get("stage")
         or batch.get("stage")
         or progress_doc.get("stage")
         or run_doc.get("stage")
         or status
+        if alive_driver
+        else status
     )
 
     meta = (
@@ -453,7 +555,7 @@ def summarize_run(root: Path) -> dict:
         eta = placeholder_eta(updated_at=updated_at)
 
     progress = _aggregate_progress(
-        root, plan, batch, runtime, progress_doc, live_snapshot, status
+        root, plan, batch, runtime, progress_doc, live_snapshot, status, alive_driver
     )
     wandb_url = tracking.get("url")
     if not wandb_url and isinstance(live_snapshot.get("tasks"), list):
@@ -501,19 +603,20 @@ def collect_summary(
     except Exception:
         pass
 
+    from smartsom.experiments.control import processes
+
+    process_table = cache(processes)  # One host scan, only if a run claims activity.
     records = []
     for directory in discover_top_level_runs(roots):
         try:
-            records.append(summarize_run(directory))
+            records.append(summarize_run(directory, process_table=process_table))
         except (OSError, ValueError):
             continue
 
+    buckets = _bucket_counts(r["status"] for r in records)
     counts = {
-        "running": sum(r["status"] in ACTIVE_STATUSES for r in records),
-        "queued": sum(r["status"] in QUEUED_STATUSES for r in records),
-        "paused": sum(r["status"] in PAUSED_STATUSES for r in records),
-        "completed": sum(r["status"] in COMPLETED_STATUSES for r in records),
-        "failed": sum(r["status"] in FAILED_STATUSES for r in records),
+        "running": buckets.pop("active"),
+        **buckets,
         "total": len(records),
     }
 
@@ -567,7 +670,8 @@ def render_summary_text(payload: dict) -> str:
         f"Host: {host.get('name')} ({host.get('platform')}) · CPU {cpu_text} · RAM {mem_text}",
         f"Runs: running={counts.get('running', 0)} queued={counts.get('queued', 0)} "
         f"paused={counts.get('paused', 0)} completed={counts.get('completed', 0)} "
-        f"failed={counts.get('failed', 0)} total={counts.get('total', 0)}",
+        f"failed={counts.get('failed', 0)} stopped={counts.get('stopped', 0)} "
+        f"total={counts.get('total', 0)}",
     ]
     for row in payload.get("batches", []):
         effective = (row.get("meta") or {}).get("effective") or {}
