@@ -840,6 +840,33 @@ def test_summary_buckets_partition_every_runtime_status(tmp_path, monkeypatch):
     }
 
 
+def test_summary_counts_partial_batch_by_its_selected_tasks(tmp_path):
+    def batch(name, files):
+        root = tmp_path / name
+        root.mkdir()
+        (root / "plan.json").write_text(
+            json.dumps({"files": [{"id": tid} for tid in files]})
+        )
+        (root / "batch.json").write_text(
+            json.dumps(
+                {
+                    "status": "partial",
+                    "files": {tid: {"status": status} for tid, status in files.items()},
+                }
+            )
+        )
+
+    # Seed 101 finished; 102 is waiting for a later --resume-missing.
+    batch("deferred", {"s101": "completed", "s102": "deferred"})
+    batch("stopped", {"s101": "completed", "s102": "stopped"})
+    batch("all-deferred", {"s101": "deferred", "s102": "deferred"})
+    summary = collect_summary([tmp_path])
+    assert {row["status"] for row in summary["batches"]} == {"partial"}
+    assert summary["counts"]["completed"] == 1
+    assert summary["counts"]["stopped"] == 2
+    assert summary["counts"]["total"] == 3
+
+
 @pytest.mark.parametrize("status", ["smoke", "calibrating", "evaluating"])
 def test_active_native_tasks_and_case_progress(tmp_path, status):
     from smartsom.telemetry.monitor_summary import summarize_run

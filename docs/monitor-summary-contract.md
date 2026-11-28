@@ -149,6 +149,11 @@ so the buckets always sum to `total` / `total_tasks`; deferred tasks sit outside
 | `removed` | `removed`, `removing` |
 | `other` | any other or `unknown` status |
 
+A run's own `status` is reported unchanged. For `counts` only, a `partial` batch
+whose selected tasks all completed (`completed_tasks == total_tasks`, the rest
+deferred to a later `--resume-missing`) counts as `completed`; any other `partial`
+batch counts as `stopped`.
+
 A run that claims an active status is checked against the processes recorded in
 `control/owner.json` (PID plus start time and boot context), its owned sessions and
 any pending background launcher. When none of them is alive, as after SIGKILL, OOM

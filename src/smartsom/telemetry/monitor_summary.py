@@ -71,11 +71,23 @@ def _bucket(status) -> str:
     return "other"
 
 
-def _bucket_counts(statuses) -> dict[str, int]:
+def _bucket_counts(statuses=(), *, buckets=()) -> dict[str, int]:
     counts = dict.fromkeys([name for name, _ in BUCKETS] + ["other"], 0)
-    for status in statuses:
-        counts[_bucket(status)] += 1
+    for name in [*map(_bucket, statuses), *buckets]:
+        counts[name] += 1
     return counts
+
+
+def _record_bucket(record: dict) -> str:
+    """A partial batch whose selected tasks all completed only defers later seeds."""
+    progress = record.get("progress") or {}
+    if (
+        record["status"] == "partial"
+        and progress.get("total_tasks")
+        and progress.get("completed_tasks") == progress["total_tasks"]
+    ):
+        return "completed"
+    return _bucket(record["status"])
 
 
 def dead_driver_status(
@@ -613,7 +625,7 @@ def collect_summary(
         except (OSError, ValueError):
             continue
 
-    buckets = _bucket_counts(r["status"] for r in records)
+    buckets = _bucket_counts(buckets=map(_record_bucket, records))
     counts = {
         "running": buckets.pop("active"),
         **buckets,
